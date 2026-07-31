@@ -1,0 +1,69 @@
+[package]
+name = "termixer"
+version = "0.1.0"
+edition = "2024"
+description = "A TUI mixer for DJ-ing from any Unix system's terminal."
+authors = ["Daniel Tompkins"]
+license = "MIT"
+repository = "https://github.com/l00sed/termixer"
+homepage = "https://github.com/l00sed/termixer"
+readme = "README.md"
+keywords = ["tui", "audio", "mixer", "dj", "mpv", "rust", "terminal", "pads"]
+categories = ["command-line-utilities", "multimedia::audio"]
+
+[dependencies]
+# TUI framework
+ratatui = "0.30"
+crossterm = "0.29"
+
+# Async runtime for MPV IPC
+tokio = { version = "1", features = ["full"] }
+
+# JSON for MPV IPC protocol
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Native file dialogs for save/load
+rfd = "0.15"
+
+# Error handling
+anyhow = "1"
+
+# File globbing
+glob = "0.3"
+
+# Audio playback for samples
+rodio = "0.22"
+
+# Audio device enumeration (used by output.rs)
+cpal = "0.17"
+coreaudio-rs = { version = "0.13", optional = true }
+jack = { version = "0.13", optional = true }
+
+# Lock-free primitives for the real-time audio path
+triple_buffer = "8"       # SPSC snapshot: UI writes control state, audio reads latest
+rtrb = "0.3"              # SPSC ring for audio commands (no Mutex)
+crossbeam-queue = "0.3"   # Lock-free bounded queue for debug log capture
+
+# Unicode display-width aware string handling
+unicode-width = "0.2"
+
+# BPM detection
+stratum-dsp = "1.0"
+symphonia = { version = "0.5", features = ["mp3", "aac", "flac", "ogg", "wav", "isomp4"] }
+
+# Logging (optional, for debugging)
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Unix process control (for stderr redirect)
+libc = "0.2"
+
+[features]
+default = []
+jack-backend = ["dep:jack"]
+coreaudio-backend = ["dep:coreaudio-rs"]
+
+[profile.release]
+lto = true
+codegen-units = 1

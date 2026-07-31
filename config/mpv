@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REAL_MPV="/opt/homebrew/bin/mpv"
+
+if [ "${TM:-0}" = "1" ]; then
+  exec "$REAL_MPV" \
+    --input-ipc-server=/tmp/termixer.sock \
+    --ao=pcm \
+    --ao-pcm-file=/tmp/termixer.pcm \
+    --ao-pcm-waveheader=no \
+    --audio-format=float \
+    --audio-samplerate=48000 \
+    --audio-channels=stereo \
+    "$@"
+else
+  exec "$REAL_MPV" "$@"
+fi
