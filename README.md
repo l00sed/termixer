@@ -21,6 +21,22 @@ A terminal-based DJ mixer for live performance with [TidalCycles](https://tidalc
 - **MPV** — media playback with IPC socket support
 - **SuperCollider** (optional) — for TidalCycles integration
 
+## Installation
+
+### From crates.io
+
+```bash
+cargo install termixer
+```
+
+### From source
+
+```bash
+git clone https://github.com/l00sed/termixer.git
+cd termixer
+cargo install --path .
+```
+
 ## Build
 
 ```bash
