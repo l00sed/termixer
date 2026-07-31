@@ -1,7 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REAL_MPV="/opt/homebrew/bin/mpv"
+SELF=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")
+CANDIDATE=$(command -v mpv 2>/dev/null) || CANDIDATE=""
+if [ -n "$CANDIDATE" ] && [ "$CANDIDATE" != "$SELF" ] && [ -x "$CANDIDATE" ]; then
+  REAL_MPV="$CANDIDATE"
+else
+  for path in /opt/homebrew/bin/mpv /usr/local/bin/mpv /usr/bin/mpv "$HOME/.local/bin/mpv"; do
+    [ -x "$path" ] && REAL_MPV="$path" && break
+  done
+  : "${REAL_MPV:=mpv}"
+fi
 
 if [ "${TM:-0}" = "1" ]; then
   exec "$REAL_MPV" \
