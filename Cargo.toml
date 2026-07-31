@@ -8,7 +8,7 @@ license = "MIT"
 repository = "https://github.com/l00sed/termixer"
 homepage = "https://github.com/l00sed/termixer"
 readme = "README.md"
-keywords = ["tui", "audio", "mixer", "dj", "mpv", "rust", "terminal", "pads"]
+keywords = ["tui", "mixer", "dj", "mpv", "supercollider"]
 categories = ["command-line-utilities", "multimedia::audio"]
 
 [dependencies]
