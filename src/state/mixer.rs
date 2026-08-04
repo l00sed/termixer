@@ -28,7 +28,6 @@ impl DjSection {
             deck_c_channel: 2,
         }
     }
-
 }
 
 impl Default for DjSection {
@@ -185,10 +184,10 @@ impl MixerChannel {
             muted: false,
             solo: false,
             pan: 0.0,
-            filter_cutoff: 0.0,   // Off
-            filter_freq: 0.5,     // Center (1kHz)
-            lfo_shape: 0.5,       // Blend (square/sine)
-            lfo_speed: 0.0,       // Slow
+            filter_cutoff: 0.0, // Off
+            filter_freq: 0.5,   // Center (1kHz)
+            lfo_shape: 0.5,     // Blend (square/sine)
+            lfo_speed: 0.0,     // Slow
             lfo_phase: 0.0,
             lfo_sync_tick: 0,
             prev_lfo_speed: 0.0,
@@ -305,8 +304,8 @@ impl ChannelControl {
             ChannelControl::EqHighKill => "H×",
             ChannelControl::Mute => "MUTE",
             ChannelControl::Solo => "SOLO",
-            ChannelControl::CueSendToA => "-> A",
-            ChannelControl::CueSendToB => "-> B",
+            ChannelControl::CueSendToA => " A",
+            ChannelControl::CueSendToB => " B",
             ChannelControl::CueOutputSelect => "OUTPUT",
         }
     }
@@ -380,16 +379,16 @@ impl ChannelControl {
             _ => None,
         }
     }
-    
+
     /// Get row index for non-deck channels (no PlayPause/Bpm/Key)
     pub fn row_index_no_deck(&self) -> usize {
         match self {
             ChannelControl::PrevTrack => 0,
             ChannelControl::NextTrack => 0,
             ChannelControl::PlayPause => 0, // Not used, but fallback
-            ChannelControl::Scrub => 0,       // Not used, but fallback
-            ChannelControl::Bpm => 0,          // Not used for non-deck, fallback
-            ChannelControl::Key => 0,          // Not used for non-deck, fallback
+            ChannelControl::Scrub => 0,     // Not used, but fallback
+            ChannelControl::Bpm => 0,       // Not used for non-deck, fallback
+            ChannelControl::Key => 0,       // Not used for non-deck, fallback
             ChannelControl::EqHigh | ChannelControl::EqHighKill => 0,
             ChannelControl::EqMid | ChannelControl::EqMidKill => 1,
             ChannelControl::EqLow | ChannelControl::EqLowKill => 2,
@@ -407,7 +406,7 @@ impl ChannelControl {
             ChannelControl::CueOutputSelect => 13,
         }
     }
-    
+
     pub fn from_row_index_no_deck(index: usize) -> Option<Self> {
         match index {
             0 => Some(ChannelControl::EqHigh),
@@ -436,6 +435,10 @@ pub const MASTER_EQ_FREQUENCIES: [f32; 10] = [
 pub struct MasterChannel {
     /// Master fader level
     pub fader: f32,
+    /// Microphone fader level (0.5 is unity)
+    pub mic_fader: f32,
+    /// Microphone mute
+    pub mic_muted: bool,
     /// Master mute
     pub muted: bool,
     /// Master play/pause (controls all decks and loops)
@@ -461,6 +464,8 @@ impl MasterChannel {
     pub fn new() -> Self {
         Self {
             fader: 0.5,
+            mic_fader: 0.5,
+            mic_muted: true,
             muted: false,
             playing: true,
             peak_left: 0.0,
@@ -495,6 +500,9 @@ pub enum GlobalControl {
     Crossfader,
     HeadphoneVolume,
     MasterFader,
+    MicFader,
+    MicMute,
+    MicInputSelect,
     MasterMute,
     MasterOutputSelect,
     MasterEq32,
@@ -517,6 +525,9 @@ impl GlobalControl {
             GlobalControl::Crossfader => "X-FADER",
             GlobalControl::HeadphoneVolume => "PHONES",
             GlobalControl::MasterFader => "GAIN",
+            GlobalControl::MicFader => "MIC GAIN",
+            GlobalControl::MicMute => "MIC MUTE",
+            GlobalControl::MicInputSelect => "MIC INPUT",
             GlobalControl::MasterMute => "MUTE",
             GlobalControl::MasterOutputSelect => "OUTPUT",
             GlobalControl::MasterEq32 => "32",
@@ -666,19 +677,24 @@ impl MixerState {
             self.channels.get_mut(idx)
         }
     }
-    
+
     /// Check if a channel index is a deck channel (has PlayPause/BPM controls)
     pub fn is_deck_channel(&self, ch_idx: usize) -> bool {
-        ch_idx == self.dj.deck_a_channel || ch_idx == self.dj.deck_b_channel || ch_idx == self.dj.deck_c_channel
+        ch_idx == self.dj.deck_a_channel
+            || ch_idx == self.dj.deck_b_channel
+            || ch_idx == self.dj.deck_c_channel
     }
 
     /// Check if the current control is in the EQ section (High/Mid/Low + kill switches)
     pub fn is_in_eq_section(&self) -> bool {
         matches!(
             self.selected_control,
-            ChannelControl::EqHigh | ChannelControl::EqHighKill |
-            ChannelControl::EqMid | ChannelControl::EqMidKill |
-            ChannelControl::EqLow | ChannelControl::EqLowKill
+            ChannelControl::EqHigh
+                | ChannelControl::EqHighKill
+                | ChannelControl::EqMid
+                | ChannelControl::EqMidKill
+                | ChannelControl::EqLow
+                | ChannelControl::EqLowKill
         )
     }
 
@@ -686,8 +702,10 @@ impl MixerState {
     pub fn is_in_filter_section(&self) -> bool {
         matches!(
             self.selected_control,
-            ChannelControl::FilterCutoff | ChannelControl::FilterFreq |
-            ChannelControl::LfoShape | ChannelControl::LfoSpeed
+            ChannelControl::FilterCutoff
+                | ChannelControl::FilterFreq
+                | ChannelControl::LfoShape
+                | ChannelControl::LfoSpeed
         )
     }
 
@@ -696,39 +714,29 @@ impl MixerState {
         self.is_in_eq_section() || self.is_in_filter_section()
     }
 
-    /// Send CUE channel to Deck A or B (transfers all settings, clears CUE)
-    pub fn send_cue_to_deck(&mut self, target: SendTarget) {
+    /// Swap CUE with Deck A or B while keeping each channel's physical index.
+    pub fn swap_cue_with_deck(&mut self, target: SendTarget) {
         let target_idx = match target {
             SendTarget::A => self.dj.deck_a_channel,
             SendTarget::B => self.dj.deck_b_channel,
         };
 
         if let Some(target_channel) = self.channels.get_mut(target_idx) {
-            // Transfer all settings from CUE to target
-            target_channel.name = self.cue_channel.name.clone();
-            target_channel.fader = self.cue_channel.fader;
-            target_channel.muted = self.cue_channel.muted;
-            target_channel.solo = self.cue_channel.solo;
-            target_channel.pan = self.cue_channel.pan;
-            target_channel.filter_cutoff = self.cue_channel.filter_cutoff;
-            target_channel.filter_freq = self.cue_channel.filter_freq;
-            target_channel.lfo_shape = self.cue_channel.lfo_shape;
-            target_channel.lfo_speed = self.cue_channel.lfo_speed;
-            target_channel.eq_low = self.cue_channel.eq_low;
-            target_channel.eq_mid = self.cue_channel.eq_mid;
-            target_channel.eq_high = self.cue_channel.eq_high;
-            target_channel.eq_low_kill = self.cue_channel.eq_low_kill;
-            target_channel.eq_mid_kill = self.cue_channel.eq_mid_kill;
-            target_channel.eq_high_kill = self.cue_channel.eq_high_kill;
-            target_channel.source_id = self.cue_channel.source_id.clone();
-            target_channel.connected = self.cue_channel.connected;
-            target_channel.playing = self.cue_channel.playing;
-            target_channel.playback_speed = self.cue_channel.playback_speed;
+            std::mem::swap(target_channel, &mut self.cue_channel);
+            target_channel.index = target_idx;
+            target_channel.pfl = false;
+            self.cue_channel.index = self.dj.deck_c_channel;
+            self.cue_channel.pfl = true;
         }
 
-        // Clear CUE channel
-        self.cue_channel = MixerChannel::new("CUE", 2);
-        self.cue_channel.pfl = true;
+        let saved_target_fader = self.pre_solo_faders.remove(&target_idx);
+        let saved_cue_fader = self.pre_solo_cue_fader.take();
+        if let Some(fader) = saved_cue_fader {
+            self.pre_solo_faders.insert(target_idx, fader);
+        }
+        self.pre_solo_cue_fader = saved_target_fader;
+        self.previously_playing
+            .swap(target_idx, self.dj.deck_c_channel);
     }
 
     /// Move selection up (round-robin)
@@ -740,18 +748,29 @@ impl MixerState {
         } else {
             self.selected_control.row_index_no_deck()
         };
-        
+
         // Check if scrubber is visible.
-        let scrub_visible = self.selected_channel()
+        let scrub_visible = self
+            .selected_channel()
             .map(MixerChannel::scrub_available)
             .unwrap_or(false);
-        
+
         // Max row indices: CUE=16 (CueOutputSelect), Deck A/B=13 (Solo), Non-deck=10 (Solo)
-        let max_row = if is_cue_pane { 16 } else if is_deck { 13 } else { 10 };
+        let max_row = if is_cue_pane {
+            16
+        } else if is_deck {
+            13
+        } else {
+            10
+        };
         // Min row: skip Scrub (0) when scrub is unavailable
         let min_row = if scrub_visible { 0 } else { 1 };
-        let mut new_row = if current_row <= min_row { max_row } else { current_row - 1 };
-        
+        let mut new_row = if current_row <= min_row {
+            max_row
+        } else {
+            current_row - 1
+        };
+
         // CUE deck visual layout:
         //   Row 1: CUT(6) | FREQ(7) | SHP(8) | SPD(9)
         //   Row 2: PAN(10)
@@ -761,25 +780,31 @@ impl MixerState {
         //   Row 6: OUTPUT(16)
         if is_cue_pane {
             new_row = match current_row {
-                16 => 15,  // OUTPUT → ->B
-                15 => 14,  // ->B → ->A (up one row, same side)
-                14 => 11,  // →A → Fader
-                13 => 12,  // S → M (up, same side)
-                12 => 11,  // M → Fader
-                11 => 10,  // Fader → Pan
-                10 => 9,   // Pan → SPD
-                _ => if new_row <= min_row { max_row } else { new_row },
+                16 => 15, // OUTPUT → ->B
+                15 => 14, // ->B → ->A (up one row, same side)
+                14 => 11, // →A → Fader
+                13 => 12, // S → M (up, same side)
+                12 => 11, // M → Fader
+                11 => 10, // Fader → Pan
+                10 => 9,  // Pan → SPD
+                _ => {
+                    if new_row <= min_row {
+                        max_row
+                    } else {
+                        new_row
+                    }
+                }
             };
         } else if is_deck && current_row == 13 {
             // Decks A/B: S → Fader (skip M)
             new_row = 11;
         }
-        
+
         // Skip Scrub when scrub is unavailable
         if !scrub_visible && new_row == 0 {
             new_row = max_row;
         }
-        
+
         if is_deck || is_cue_pane {
             if let Some(ctrl) = ChannelControl::from_row_index(new_row) {
                 self.selected_control = ctrl;
@@ -796,23 +821,34 @@ impl MixerState {
         } else {
             self.selected_control.row_index_no_deck()
         };
-        
+
         // Check if scrubber is visible.
-        let scrub_visible = self.selected_channel()
+        let scrub_visible = self
+            .selected_channel()
             .map(MixerChannel::scrub_available)
             .unwrap_or(false);
-        
+
         // Max row indices: CUE=16 (CueOutputSelect), Deck A/B=13 (Solo), Non-deck=10 (Solo)
-        let max_row = if is_cue_pane { 16 } else if is_deck { 13 } else { 10 };
+        let max_row = if is_cue_pane {
+            16
+        } else if is_deck {
+            13
+        } else {
+            10
+        };
         // Min row: skip Scrub (0) when scrub is unavailable
         let min_row = if scrub_visible { 0 } else { 1 };
-        let mut new_row = if current_row >= max_row { min_row } else { current_row + 1 };
-        
+        let mut new_row = if current_row >= max_row {
+            min_row
+        } else {
+            current_row + 1
+        };
+
         // Skip Scrub when scrub is unavailable
         if !scrub_visible && new_row == 0 {
             new_row = 1;
         }
-        
+
         // CUE deck visual layout:
         //   Row 1: CUT(6) | FREQ(7) | SHP(8) | SPD(9)
         //   Row 2: PAN(10)
@@ -822,16 +858,22 @@ impl MixerState {
         //   Row 6: OUTPUT(16)
         if is_cue_pane {
             new_row = match current_row {
-                11 => 12,  // Fader → M
-                12 => 13,  // M → S
-                14 => 15,  // ->A → ->B (down one row)
-                15 => 16,  // ->B → OUTPUT (down to row 6)
-                13 => 16,  // S → OUTPUT (down)
-                16 => min_row,  // OUTPUT → wrap to top (skip Scrub if no track)
-                _ => if new_row >= max_row { min_row } else { new_row },
+                11 => 12,      // Fader → M
+                12 => 13,      // M → S
+                14 => 15,      // ->A → ->B (down one row)
+                15 => 16,      // ->B → OUTPUT (down to row 6)
+                13 => 16,      // S → OUTPUT (down)
+                16 => min_row, // OUTPUT → wrap to top (skip Scrub if no track)
+                _ => {
+                    if new_row >= max_row {
+                        min_row
+                    } else {
+                        new_row
+                    }
+                }
             };
         }
-        
+
         if is_deck || is_cue_pane {
             if let Some(ctrl) = ChannelControl::from_row_index(new_row) {
                 self.selected_control = ctrl;
@@ -850,7 +892,7 @@ impl MixerState {
                 } else {
                     self.channels.get_mut(ch_idx)
                 };
-                
+
                 if let Some(channel) = channel {
                     match self.selected_control {
                         ChannelControl::Fader => {
@@ -861,12 +903,14 @@ impl MixerState {
                         }
                         ChannelControl::Scrub => {
                             if !channel.uses_supercollider {
-                                channel.playback_speed = (channel.playback_speed + delta * 0.5).clamp(0.5, 2.0);
+                                channel.playback_speed =
+                                    (channel.playback_speed + delta * 0.5).clamp(0.5, 2.0);
                             }
                         }
                         ChannelControl::Bpm => {
                             // Adjust target BPM: +/- 1 BPM per keypress
-                            channel.target_bpm = (channel.target_bpm + delta * 20.0).clamp(10.0, 400.0);
+                            channel.target_bpm =
+                                (channel.target_bpm + delta * 20.0).clamp(10.0, 400.0);
                         }
                         ChannelControl::Key => {
                             // Keep detected key as the base label; edits adjust semitone offset.
@@ -876,7 +920,8 @@ impl MixerState {
                             channel.pan = (channel.pan + delta).clamp(-1.0, 1.0);
                         }
                         ChannelControl::FilterCutoff => {
-                            channel.filter_cutoff = (channel.filter_cutoff + delta * 0.5).clamp(0.0, 1.0);
+                            channel.filter_cutoff =
+                                (channel.filter_cutoff + delta * 0.5).clamp(0.0, 1.0);
                         }
                         ChannelControl::FilterFreq => {
                             channel.filter_freq = (channel.filter_freq + delta).clamp(0.0, 1.0);
@@ -906,48 +951,66 @@ impl MixerState {
                         self.dj.crossfader = (self.dj.crossfader + delta).clamp(-1.0, 1.0);
                     }
                     GlobalControl::HeadphoneVolume => {
-                        self.dj.headphone_volume = (self.dj.headphone_volume + delta).clamp(0.0, 1.0);
+                        self.dj.headphone_volume =
+                            (self.dj.headphone_volume + delta).clamp(0.0, 1.0);
                     }
                     GlobalControl::MasterFader => {
                         let track_h = self.terminal_height.saturating_sub(28).max(1) as f32;
                         let step = 1.0 / track_h;
-                        self.master.fader = (self.master.fader + delta.signum() * step).clamp(0.0, 1.0);
+                        self.master.fader =
+                            (self.master.fader + delta.signum() * step).clamp(0.0, 1.0);
+                    }
+                    GlobalControl::MicFader => {
+                        let track_h = self.terminal_height.saturating_sub(28).max(1) as f32;
+                        let step = 1.0 / track_h;
+                        self.master.mic_fader =
+                            (self.master.mic_fader + delta.signum() * step).clamp(0.0, 1.0);
                     }
                     // Master EQ bands: +/- 6 dB per keypress, range -12 to +12
                     GlobalControl::MasterEq32 => {
-                        self.master.master_eq[0] = (self.master.master_eq[0] + delta * 6.0).clamp(-12.0, 12.0);
+                        self.master.master_eq[0] =
+                            (self.master.master_eq[0] + delta * 6.0).clamp(-12.0, 12.0);
                     }
                     GlobalControl::MasterEq64 => {
-                        self.master.master_eq[1] = (self.master.master_eq[1] + delta * 6.0).clamp(-12.0, 12.0);
+                        self.master.master_eq[1] =
+                            (self.master.master_eq[1] + delta * 6.0).clamp(-12.0, 12.0);
                     }
                     GlobalControl::MasterEq125 => {
-                        self.master.master_eq[2] = (self.master.master_eq[2] + delta * 6.0).clamp(-12.0, 12.0);
+                        self.master.master_eq[2] =
+                            (self.master.master_eq[2] + delta * 6.0).clamp(-12.0, 12.0);
                     }
                     GlobalControl::MasterEq250 => {
-                        self.master.master_eq[3] = (self.master.master_eq[3] + delta * 6.0).clamp(-12.0, 12.0);
+                        self.master.master_eq[3] =
+                            (self.master.master_eq[3] + delta * 6.0).clamp(-12.0, 12.0);
                     }
                     GlobalControl::MasterEq500 => {
-                        self.master.master_eq[4] = (self.master.master_eq[4] + delta * 6.0).clamp(-12.0, 12.0);
+                        self.master.master_eq[4] =
+                            (self.master.master_eq[4] + delta * 6.0).clamp(-12.0, 12.0);
                     }
                     GlobalControl::MasterEq1k => {
-                        self.master.master_eq[5] = (self.master.master_eq[5] + delta * 6.0).clamp(-12.0, 12.0);
+                        self.master.master_eq[5] =
+                            (self.master.master_eq[5] + delta * 6.0).clamp(-12.0, 12.0);
                     }
                     GlobalControl::MasterEq2k => {
-                        self.master.master_eq[6] = (self.master.master_eq[6] + delta * 6.0).clamp(-12.0, 12.0);
+                        self.master.master_eq[6] =
+                            (self.master.master_eq[6] + delta * 6.0).clamp(-12.0, 12.0);
                     }
                     GlobalControl::MasterEq4k => {
-                        self.master.master_eq[7] = (self.master.master_eq[7] + delta * 6.0).clamp(-12.0, 12.0);
+                        self.master.master_eq[7] =
+                            (self.master.master_eq[7] + delta * 6.0).clamp(-12.0, 12.0);
                     }
                     GlobalControl::MasterEq8k => {
-                        self.master.master_eq[8] = (self.master.master_eq[8] + delta * 6.0).clamp(-12.0, 12.0);
+                        self.master.master_eq[8] =
+                            (self.master.master_eq[8] + delta * 6.0).clamp(-12.0, 12.0);
                     }
                     GlobalControl::MasterEq16k => {
-                        self.master.master_eq[9] = (self.master.master_eq[9] + delta * 6.0).clamp(-12.0, 12.0);
+                        self.master.master_eq[9] =
+                            (self.master.master_eq[9] + delta * 6.0).clamp(-12.0, 12.0);
                     }
                     // Output selection controls are handled by UI, not continuous
-                    GlobalControl::MasterOutputSelect => {}
+                    GlobalControl::MasterOutputSelect | GlobalControl::MicInputSelect => {}
                     // Buttons/toggles don't need continuous adjustment
-                    GlobalControl::MasterMute => {}
+                    GlobalControl::MasterMute | GlobalControl::MicMute => {}
                     GlobalControl::MasterPlayPause => {}
                 }
             }
@@ -962,7 +1025,7 @@ impl MixerState {
         } else {
             self.channels.get_mut(self.selected_channel)
         };
-        
+
         if let Some(channel) = channel {
             match self.selected_control {
                 ChannelControl::PrevTrack | ChannelControl::NextTrack => {}
@@ -975,7 +1038,7 @@ impl MixerState {
                 ChannelControl::EqLowKill => channel.eq_low_kill = !channel.eq_low_kill,
                 ChannelControl::EqMidKill => channel.eq_mid_kill = !channel.eq_mid_kill,
                 ChannelControl::EqHighKill => channel.eq_high_kill = !channel.eq_high_kill,
-                 _ => {}
+                _ => {}
             }
         }
     }
@@ -987,9 +1050,7 @@ impl MixerState {
     /// Check if any deck (A, B, CUE) or master is muted
     pub fn mute_active(&self) -> bool {
         // Check any deck channel is muted
-        self.channels.iter().any(|c| c.muted)
-            || self.cue_channel.muted
-            || self.master.muted
+        self.channels.iter().any(|c| c.muted) || self.cue_channel.muted || self.master.muted
     }
 
     /// Save a channel's fader level before it enters solo mode.
@@ -1014,10 +1075,11 @@ impl MixerState {
                 return true;
             }
         } else if let Some(fader) = self.pre_solo_faders.remove(&channel_idx)
-            && let Some(ch) = self.channels.get_mut(channel_idx) {
-                ch.fader = fader;
-                return true;
-            }
+            && let Some(ch) = self.channels.get_mut(channel_idx)
+        {
+            ch.fader = fader;
+            return true;
+        }
         false
     }
 
@@ -1043,7 +1105,9 @@ impl MixerState {
             channel.rms_level *= 0.85;
 
             // Check if we have real audio levels for this channel
-            if let Some(&(_, peak_l, peak_r, rms_l, rms_r)) = real_channels.iter().find(|(idx, _, _, _, _)| *idx == i) {
+            if let Some(&(_, peak_l, peak_r, rms_l, rms_r)) =
+                real_channels.iter().find(|(idx, _, _, _, _)| *idx == i)
+            {
                 let effective_muted =
                     channel.muted || (self.solo_active && !channel.solo) || !channel.playing;
 
@@ -1109,21 +1173,33 @@ impl MixerState {
 
             // EQ gain: apply each band separately, then combine
             // Kill a band = -60dB (near silence for that frequency range)
-            let low = if channel.eq_low_kill { -60.0 } else { channel.eq_low };
-            let mid = if channel.eq_mid_kill { -60.0 } else { channel.eq_mid };
-            let high = if channel.eq_high_kill { -60.0 } else { channel.eq_high };
-            
+            let low = if channel.eq_low_kill {
+                -60.0
+            } else {
+                channel.eq_low
+            };
+            let mid = if channel.eq_mid_kill {
+                -60.0
+            } else {
+                channel.eq_mid
+            };
+            let high = if channel.eq_high_kill {
+                -60.0
+            } else {
+                channel.eq_high
+            };
+
             // Convert each band to linear and combine
             let low_lin = 10f32.powf(low / 20.0);
             let mid_lin = 10f32.powf(mid / 20.0);
             let high_lin = 10f32.powf(high / 20.0);
-            
+
             // Weighted combination (each band covers ~1/3 of spectrum)
             let eq_mult = (low_lin + mid_lin + high_lin) / 3.0;
 
             // Filter attenuation (simplified — full cutoff = near silence)
             let filter_mult = if channel.filter_cutoff > 0.01 {
-                1.0 - channel.filter_cutoff * 0.9  // Up to 90% attenuation at full cutoff
+                1.0 - channel.filter_cutoff * 0.9 // Up to 90% attenuation at full cutoff
             } else {
                 1.0
             };
@@ -1194,7 +1270,10 @@ impl MixerState {
             cue.peak_level *= 0.92;
             cue.rms_level *= 0.85;
 
-            if let Some(&(_, peak_l, peak_r, rms_l, rms_r)) = real_channels.iter().find(|(idx, _, _, _, _)| *idx == self.dj.deck_c_channel) {
+            if let Some(&(_, peak_l, peak_r, rms_l, rms_r)) = real_channels
+                .iter()
+                .find(|(idx, _, _, _, _)| *idx == self.dj.deck_c_channel)
+            {
                 let effective_muted = cue.muted || (self.solo_active && !cue.solo) || !cue.playing;
 
                 if !effective_muted {
@@ -1223,9 +1302,9 @@ impl MixerState {
                     let low = if cue.eq_low_kill { -60.0 } else { cue.eq_low };
                     let mid = if cue.eq_mid_kill { -60.0 } else { cue.eq_mid };
                     let high = if cue.eq_high_kill { -60.0 } else { cue.eq_high };
-                    let eq_mult = (10f32.powf(low / 20.0)
-                        + 10f32.powf(mid / 20.0)
-                        + 10f32.powf(high / 20.0)) / 3.0;
+                    let eq_mult =
+                        (10f32.powf(low / 20.0) + 10f32.powf(mid / 20.0) + 10f32.powf(high / 20.0))
+                            / 3.0;
                     let filter_mult = if cue.filter_cutoff > 0.01 {
                         1.0 - cue.filter_cutoff * 0.9
                     } else {
@@ -1322,16 +1401,16 @@ impl MixerState {
         // Simulated frequency distribution: boost all bands so the analyzer is lively.
         // Real FFT would give natural distribution; here we shape noise to look musical.
         let spectrum_weights: [f32; 10] = [
-            6.0,  // 32Hz
-            7.0,  // 64Hz
-            5.5,  // 125Hz
-            4.5,  // 250Hz
-            3.8,  // 500Hz
-            4.0,  // 1kHz
-            4.8,  // 2kHz
-            5.0,  // 4kHz
-            4.2,  // 8kHz
-            3.0,  // 16kHz
+            6.0, // 32Hz
+            7.0, // 64Hz
+            5.5, // 125Hz
+            4.5, // 250Hz
+            3.8, // 500Hz
+            4.0, // 1kHz
+            4.8, // 2kHz
+            5.0, // 4kHz
+            4.2, // 8kHz
+            3.0, // 16kHz
         ];
 
         for (i, weight) in spectrum_weights.iter().enumerate() {

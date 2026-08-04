@@ -7,6 +7,7 @@ use ratatui::{
     text::Span,
     widgets::{Block, Borders, Widget},
 };
+use unicode_width::UnicodeWidthStr;
 
 use crate::state::{ChannelControl, GlobalControl, MixerChannel};
 use crate::ui::colors::*;
@@ -92,7 +93,6 @@ impl<'a> ChannelStrip<'a> {
     fn is_control_editing(&self, control: ChannelControl) -> bool {
         self.editing && self.is_control_selected(control)
     }
-
 }
 
 impl<'a> Widget for ChannelStrip<'a> {
@@ -107,7 +107,11 @@ impl<'a> Widget for ChannelStrip<'a> {
         let inner = if self.show_border {
             // Minimalist border - thin line style
             let border_color = if self.selected {
-                if self.selected_control.is_some() { BORDER_ACTIVE } else { BORDER_NAVIGATED }
+                if self.selected_control.is_some() {
+                    BORDER_ACTIVE
+                } else {
+                    BORDER_NAVIGATED
+                }
             } else if self.deck_label.is_some() {
                 if self.channel.connected {
                     match self.deck_color {
@@ -128,16 +132,32 @@ impl<'a> Widget for ChannelStrip<'a> {
 
             let title = if let Some(deck) = self.deck_label {
                 if self.channel.connected {
-                    if deck.contains('A') { " A ● " } else if deck.contains('B') { " B ● " } else { " C ● " }
-                } else if deck.contains('A') { " A ○ " } else if deck.contains('B') { " B ○ " } else { " C ○ " }
+                    if deck.contains('A') {
+                        " A ● "
+                    } else if deck.contains('B') {
+                        " B ● "
+                    } else {
+                        " C ● "
+                    }
+                } else if deck.contains('A') {
+                    " A ○ "
+                } else if deck.contains('B') {
+                    " B ○ "
+                } else {
+                    " C ○ "
+                }
             } else {
                 ""
             };
 
             let title_style = if self.selected {
-                Style::default().fg(BORDER_ACTIVE).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(BORDER_ACTIVE)
+                    .add_modifier(Modifier::BOLD)
             } else if self.channel.connected {
-                Style::default().fg(border_color).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(border_color)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(Color::Rgb(80, 80, 80))
             };
@@ -159,27 +179,27 @@ impl<'a> Widget for ChannelStrip<'a> {
 
         let constraints = if has_deck {
             vec![
-                Constraint::Length(1),  // Scrubber (hidden until track loaded)
-                Constraint::Length(7),  // Deck indicator (ring + space + marquee)
-                Constraint::Length(1),  // BPM display (combined BPM+KEY)
-                Constraint::Length(1),  // Separator below BPM
-                Constraint::Length(7),  // EQ section (3 bars + separator + 4 filter knobs + gaps)
-                Constraint::Length(1),  // Separator below EQ
-                Constraint::Length(1),  // Pan
-                Constraint::Length(1),  // Separator between pan and fader
-                Constraint::Min(5),     // Fader + Meter
-                Constraint::Length(1),  // Separator before buttons
-                Constraint::Length(1),  // Buttons row
+                Constraint::Length(1), // Scrubber (hidden until track loaded)
+                Constraint::Length(7), // Deck indicator (ring + space + marquee)
+                Constraint::Length(1), // BPM display (combined BPM+KEY)
+                Constraint::Length(1), // Separator below BPM
+                Constraint::Length(7), // EQ section (3 bars + separator + 4 filter knobs + gaps)
+                Constraint::Length(1), // Separator below EQ
+                Constraint::Length(1), // Pan
+                Constraint::Length(1), // Separator between pan and fader
+                Constraint::Min(5),    // Fader + Meter
+                Constraint::Length(1), // Separator before buttons
+                Constraint::Length(1), // Buttons row
             ]
         } else {
             vec![
-                Constraint::Length(7),  // EQ section (3 bars + separator + 4 filter knobs + gaps)
-                Constraint::Length(1),  // Separator below EQ
-                Constraint::Length(1),  // Pan
-                Constraint::Length(1),  // Separator between pan and fader
-                Constraint::Min(7),     // Fader + Meter
-                Constraint::Length(1),  // Separator before buttons
-                Constraint::Length(1),  // Buttons row
+                Constraint::Length(7), // EQ section (3 bars + separator + 4 filter knobs + gaps)
+                Constraint::Length(1), // Separator below EQ
+                Constraint::Length(1), // Pan
+                Constraint::Length(1), // Separator between pan and fader
+                Constraint::Min(7),    // Fader + Meter
+                Constraint::Length(1), // Separator before buttons
+                Constraint::Length(1), // Buttons row
             ]
         };
 
@@ -194,20 +214,32 @@ impl<'a> Widget for ChannelStrip<'a> {
         if has_deck {
             // Scrubber (shown for playable non-SC sources)
             if self.channel.scrub_available() {
-                self.render_scrub_bar(chunks[idx], buf, self.is_control_selected(ChannelControl::Scrub));
+                self.render_scrub_bar(
+                    chunks[idx],
+                    buf,
+                    self.is_control_selected(ChannelControl::Scrub),
+                );
             }
             idx += 1;
 
             let deck_label = self.deck_label.unwrap_or("");
-            let deck_char = if deck_label.contains('A') { 'A' } else if deck_label.contains('B') { 'B' } else { 'C' };
+            let deck_char = if deck_label.contains('A') {
+                'A'
+            } else if deck_label.contains('B') {
+                'B'
+            } else {
+                'C'
+            };
             let source_name = if self.channel.connected {
                 Some(self.channel.name.clone())
             } else {
                 None
             };
             let now_ms = self.elapsed_ms;
-            let prev_executed_recently = now_ms.saturating_sub(self.channel.prev_exec_flash_ms) <= PLAYLIST_EXEC_FLASH_MS;
-            let next_executed_recently = now_ms.saturating_sub(self.channel.next_exec_flash_ms) <= PLAYLIST_EXEC_FLASH_MS;
+            let prev_executed_recently =
+                now_ms.saturating_sub(self.channel.prev_exec_flash_ms) <= PLAYLIST_EXEC_FLASH_MS;
+            let next_executed_recently =
+                now_ms.saturating_sub(self.channel.next_exec_flash_ms) <= PLAYLIST_EXEC_FLASH_MS;
             DeckIndicator::new(deck_char)
                 .playing(self.channel.playing)
                 .speed(self.channel.playback_speed)
@@ -248,25 +280,35 @@ impl<'a> Widget for ChannelStrip<'a> {
                 "---".to_string()
             };
             let base = self.channel.base_bpm;
-            let speed = if base > 0.0 { self.channel.target_bpm / base } else { 1.0 };
+            let speed = if base > 0.0 {
+                self.channel.target_bpm / base
+            } else {
+                1.0
+            };
             let factor_str = format!("x{:.2}", speed);
 
             let speed_style = if bpm_editing {
-                Style::default().fg(TEXT_BRIGHT).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(TEXT_BRIGHT)
+                    .add_modifier(Modifier::BOLD)
             } else if bpm_selected {
                 Style::default().fg(TEXT_DEFAULT)
             } else {
                 Style::default().fg(TEXT_DIM)
             };
             let bpm_style = if bpm_editing {
-                Style::default().fg(TEXT_BRIGHT).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(TEXT_BRIGHT)
+                    .add_modifier(Modifier::BOLD)
             } else if bpm_selected {
                 Style::default().fg(TEXT_BRIGHT)
             } else {
                 Style::default().fg(TEXT_DEFAULT)
             };
             let key_style = if key_editing {
-                Style::default().fg(TEXT_BRIGHT).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(TEXT_BRIGHT)
+                    .add_modifier(Modifier::BOLD)
             } else if key_selected {
                 Style::default().fg(TEXT_BRIGHT)
             } else {
@@ -284,7 +326,12 @@ impl<'a> Widget for ChannelStrip<'a> {
             // Speed factor left-aligned (4 chars: "x1.00")
             buf.set_string(bpm_area.x, bpm_area.y, &factor_str, speed_style);
             // BPM right-aligned before separator (4 chars)
-            buf.set_string(sep_x.saturating_sub(5), bpm_area.y, format!("{:>4}", bpm_value), bpm_style);
+            buf.set_string(
+                sep_x.saturating_sub(5),
+                bpm_area.y,
+                format!("{:>4}", bpm_value),
+                bpm_style,
+            );
             // Vertical separator
             let sep_style = Style::default().fg(SEPARATOR);
             buf.set_string(sep_x, bpm_area.y, "│", sep_style);
@@ -312,8 +359,13 @@ impl<'a> Widget for ChannelStrip<'a> {
         idx += 1;
 
         // Pan
-        self.render_pan_bar(chunks[idx], buf, self.channel.pan,
-            self.is_control_selected(ChannelControl::Pan), self.is_control_editing(ChannelControl::Pan));
+        self.render_pan_bar(
+            chunks[idx],
+            buf,
+            self.channel.pan,
+            self.is_control_selected(ChannelControl::Pan),
+            self.is_control_editing(ChannelControl::Pan),
+        );
         idx += 1;
 
         // Separator between pan and fader
@@ -377,7 +429,13 @@ impl<'a> ChannelStrip<'a> {
     }
 
     /// Draw a horizontal separator with a junction character at a specific x position.
-    fn draw_separator_with_junction(&self, area: Rect, buf: &mut Buffer, junction_x: u16, junction_char: &str) {
+    fn draw_separator_with_junction(
+        &self,
+        area: Rect,
+        buf: &mut Buffer,
+        junction_x: u16,
+        junction_char: &str,
+    ) {
         if area.width < 1 || area.height < 1 {
             return;
         }
@@ -397,7 +455,11 @@ impl<'a> ChannelStrip<'a> {
     #[allow(dead_code)]
     fn border_color(&self) -> Color {
         if self.selected {
-            if self.selected_control.is_some() { Color::Yellow } else { Color::Rgb(120, 100, 0) }
+            if self.selected_control.is_some() {
+                Color::Yellow
+            } else {
+                Color::Rgb(120, 100, 0)
+            }
         } else if self.deck_label.is_some() {
             if self.channel.connected {
                 match self.deck_color {
@@ -416,14 +478,23 @@ impl<'a> ChannelStrip<'a> {
     }
 
     /// Render pan bar: [L][bar][R]
-    fn render_pan_bar(&self, area: Rect, buf: &mut Buffer, value: f32, selected: bool, editing: bool) {
+    fn render_pan_bar(
+        &self,
+        area: Rect,
+        buf: &mut Buffer,
+        value: f32,
+        selected: bool,
+        editing: bool,
+    ) {
         if area.width < 7 || area.height < 1 {
             return;
         }
         let y = area.y;
 
         let label_style = if editing {
-            Style::default().fg(TEXT_EDITING).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(TEXT_EDITING)
+                .add_modifier(Modifier::BOLD)
         } else if selected {
             Style::default().fg(TEXT_BRIGHT)
         } else {
@@ -442,11 +513,16 @@ impl<'a> ChannelStrip<'a> {
             let fill_pos = (normalized * bar_width as f32) as usize;
 
             for i in 0..bar_width {
-                let (ch, is_center) = if i == center { ("│", true) } else { ("─", false) };
+                let (ch, is_center) = if i == center {
+                    ("│", true)
+                } else {
+                    ("─", false)
+                };
 
                 let color = if editing || selected {
-                    if (fill_pos > center && i > center && i <= fill_pos) ||
-                       (fill_pos < center && i < center && i >= fill_pos) {
+                    if (fill_pos > center && i > center && i <= fill_pos)
+                        || (fill_pos < center && i < center && i >= fill_pos)
+                    {
                         if editing {
                             TEXT_BRIGHT
                         } else if fill_pos > center {
@@ -454,7 +530,11 @@ impl<'a> ChannelStrip<'a> {
                         } else {
                             STATUS_MUTED
                         }
-                    } else if editing { TEXT_DIM } else { METER_TRACK }
+                    } else if editing {
+                        TEXT_DIM
+                    } else {
+                        METER_TRACK
+                    }
                 } else {
                     METER_TRACK
                 };
@@ -483,28 +563,40 @@ impl<'a> ChannelStrip<'a> {
         let sections = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
-                Constraint::Length(1),             // Low bar
-                Constraint::Length(1),             // Separator
-                Constraint::Length(1),             // Mid bar
-                Constraint::Length(1),             // Separator
-                Constraint::Length(1),             // High bar
-                Constraint::Length(1),             // Separator before filters
-                Constraint::Length(filter_width),  // Filters + LFO
+                Constraint::Length(1),            // Low bar
+                Constraint::Length(1),            // Separator
+                Constraint::Length(1),            // Mid bar
+                Constraint::Length(1),            // Separator
+                Constraint::Length(1),            // High bar
+                Constraint::Length(1),            // Separator before filters
+                Constraint::Length(filter_width), // Filters + LFO
             ])
             .split(area);
 
         // Render three EQ bands with vertical bars (L/M/H from left to right)
-        self.render_vertical_eq_bar(sections[0], buf,
-            self.channel.eq_low, self.channel.spectrum_peaks[0],
-            self.is_control_selected(ChannelControl::EqLow));
+        self.render_vertical_eq_bar(
+            sections[0],
+            buf,
+            self.channel.eq_low,
+            self.channel.spectrum_peaks[0],
+            self.is_control_selected(ChannelControl::EqLow),
+        );
 
-        self.render_vertical_eq_bar(sections[2], buf,
-            self.channel.eq_mid, self.channel.spectrum_peaks[1],
-            self.is_control_selected(ChannelControl::EqMid));
+        self.render_vertical_eq_bar(
+            sections[2],
+            buf,
+            self.channel.eq_mid,
+            self.channel.spectrum_peaks[1],
+            self.is_control_selected(ChannelControl::EqMid),
+        );
 
-        self.render_vertical_eq_bar(sections[4], buf,
-            self.channel.eq_high, self.channel.spectrum_peaks[2],
-            self.is_control_selected(ChannelControl::EqHigh));
+        self.render_vertical_eq_bar(
+            sections[4],
+            buf,
+            self.channel.eq_high,
+            self.channel.spectrum_peaks[2],
+            self.is_control_selected(ChannelControl::EqHigh),
+        );
 
         // Collect all separator x-positions (between bands + before filters)
         let sep_style = Style::default().fg(SEPARATOR);
@@ -528,42 +620,60 @@ impl<'a> ChannelStrip<'a> {
         let filter_chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(1),   // Filter Cutoff (-/+)
-                Constraint::Length(1),   // Gap
-                Constraint::Length(1),   // Filter Freq (H/kH)
-                Constraint::Length(1),   // Gap
-                Constraint::Length(1),   // LFO Shape (󱑻/Hz)
-                Constraint::Length(1),   // Gap
-                Constraint::Length(1),   // LFO Speed (󰴻/󰤇)
+                Constraint::Length(1), // Filter Cutoff (-/+)
+                Constraint::Length(1), // Gap
+                Constraint::Length(1), // Filter Freq (H/kH)
+                Constraint::Length(1), // Gap
+                Constraint::Length(1), // LFO Shape (󱑻/Hz)
+                Constraint::Length(1), // Gap
+                Constraint::Length(1), // LFO Speed (󰴻/󰤇)
             ])
             .split(sections[6]);
 
-        self.render_filter_bar(filter_chunks[0], buf,
+        self.render_filter_bar(
+            filter_chunks[0],
+            buf,
             self.channel.filter_cutoff,
             Some(("-", "+")),
-            self.is_control_selected(ChannelControl::FilterCutoff));
+            self.is_control_selected(ChannelControl::FilterCutoff),
+        );
 
-        self.render_filter_bar(filter_chunks[2], buf,
+        self.render_filter_bar(
+            filter_chunks[2],
+            buf,
             self.channel.filter_freq,
             Some(("Hz", "kHz")),
-            self.is_control_selected(ChannelControl::FilterFreq));
+            self.is_control_selected(ChannelControl::FilterFreq),
+        );
 
-        self.render_filter_bar(filter_chunks[4], buf,
+        self.render_filter_bar(
+            filter_chunks[4],
+            buf,
             self.channel.lfo_shape,
             Some(("󱑻", "󰥛")),
-            self.is_control_selected(ChannelControl::LfoShape));
+            self.is_control_selected(ChannelControl::LfoShape),
+        );
 
-        self.render_filter_bar(filter_chunks[6], buf,
+        self.render_filter_bar(
+            filter_chunks[6],
+            buf,
             self.channel.lfo_speed,
             Some(("󰴻", "󰤇")),
-            self.is_control_selected(ChannelControl::LfoSpeed));
+            self.is_control_selected(ChannelControl::LfoSpeed),
+        );
 
         sep_positions
     }
 
     /// Render a single vertical EQ bar
-    fn render_vertical_eq_bar(&self, area: Rect, buf: &mut Buffer,
-                               eq_value: f32, peak: f32, bar_selected: bool) {
+    fn render_vertical_eq_bar(
+        &self,
+        area: Rect,
+        buf: &mut Buffer,
+        eq_value: f32,
+        peak: f32,
+        bar_selected: bool,
+    ) {
         if area.width < 1 || area.height < 2 {
             return;
         }
@@ -586,10 +696,15 @@ impl<'a> ChannelStrip<'a> {
         // Offset step by +1 so topmost step reaches 100% and maps to red.
         let color_for_step = |step: u16| -> Color {
             let pct = (step as f32 + 1.0) / total_steps as f32;
-            if pct > 0.90 { Color::Red }
-            else if pct > 0.80 { Color::Rgb(255, 140, 0) }
-            else if pct > 0.65 { Color::Yellow }
-            else { Color::Green }
+            if pct > 0.90 {
+                Color::Red
+            } else if pct > 0.80 {
+                Color::Rgb(255, 140, 0)
+            } else if pct > 0.65 {
+                Color::Yellow
+            } else {
+                Color::Green
+            }
         };
 
         let handle_color = if bar_editing {
@@ -598,7 +713,11 @@ impl<'a> ChannelStrip<'a> {
             Color::White
         };
 
-        let handle_char = if bar_selected || bar_editing { "◆" } else { "─" };
+        let handle_char = if bar_selected || bar_editing {
+            "◆"
+        } else {
+            "─"
+        };
 
         for row in 0..bar_height {
             let y = area.y + bar_height - 1 - row;
@@ -612,7 +731,9 @@ impl<'a> ChannelStrip<'a> {
             let gain_in_upper = gain_step == upper_step;
 
             if gain_in_upper || gain_in_lower {
-                let gain_style = Style::default().fg(handle_color).add_modifier(Modifier::BOLD);
+                let gain_style = Style::default()
+                    .fg(handle_color)
+                    .add_modifier(Modifier::BOLD);
                 buf.set_string(bar_x, y, handle_char, gain_style);
             } else if upper_filled && lower_filled {
                 let c = color_for_step(upper_step);
@@ -628,8 +749,14 @@ impl<'a> ChannelStrip<'a> {
     }
 
     /// Render a compact vertical filter/LFO bar with optional label
-    fn render_filter_bar(&self, area: Rect, buf: &mut Buffer,
-                         value: f32, side_labels: Option<(&str, &str)>, selected: bool) {
+    fn render_filter_bar(
+        &self,
+        area: Rect,
+        buf: &mut Buffer,
+        value: f32,
+        side_labels: Option<(&str, &str)>,
+        selected: bool,
+    ) {
         if area.width < 1 || area.height < 1 {
             return;
         }
@@ -643,7 +770,9 @@ impl<'a> ChannelStrip<'a> {
 
         // Knob style
         let knob_style = if editing {
-            Style::default().fg(TEXT_EDITING).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(TEXT_EDITING)
+                .add_modifier(Modifier::BOLD)
         } else if selected {
             Style::default().fg(TEXT_BRIGHT)
         } else {
@@ -673,7 +802,6 @@ impl<'a> ChannelStrip<'a> {
         }
     }
 
-
     /// Render scrub slider showing elapsed/total time with position bar
     fn render_scrub_bar(&self, area: Rect, buf: &mut Buffer, selected: bool) {
         if area.width < 4 || area.height < 1 {
@@ -702,7 +830,9 @@ impl<'a> ChannelStrip<'a> {
         let time_str = format!("{}/{}", elapsed, total);
         let time_x = area.x + area.width.saturating_sub(time_str.len() as u16);
         let time_style = if editing {
-            Style::default().fg(TEXT_EDITING).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(TEXT_EDITING)
+                .add_modifier(Modifier::BOLD)
         } else if selected {
             Style::default().fg(TEXT_BRIGHT)
         } else {
@@ -732,7 +862,7 @@ impl<'a> ChannelStrip<'a> {
             return;
         }
 
-        // Two equal columns: M │ S (or M │ -> A for CUE)
+        // Two equal columns: M │ S (or M │ swap A for CUE)
         let sep_x = area.x + area.width / 2;
         let left_w = sep_x - area.x;
         let right_w = area.x + area.width - sep_x - 1;
@@ -740,17 +870,16 @@ impl<'a> ChannelStrip<'a> {
         // Center each letter within its half (with 1-cell padding on each side)
         let m_x = area.x + 1 + (left_w - 2) / 2;
 
-        // For CUE deck, right side shows "-> A" instead of "S"
+        // For CUE deck, right side swaps with A instead of toggling solo
         let (right_label, right_control, right_active) = if is_cue {
-            ("-> A", ChannelControl::CueSendToA, false)
+            (" A", ChannelControl::CueSendToA, false)
         } else {
             ("S", ChannelControl::Solo, self.channel.solo)
         };
 
         // Calculate position for right label
         let s_x = if is_cue {
-            // "-> A" is 4 chars, shift left by 1 (one less padding on left)
-            sep_x + 1 + (right_w.saturating_sub(4)) / 2
+            sep_x + 1 + (right_w.saturating_sub(right_label.width() as u16)) / 2
         } else {
             // "S" is 1 char, centered
             sep_x + 2 + (right_w - 2) / 2
@@ -758,7 +887,7 @@ impl<'a> ChannelStrip<'a> {
 
         let sep_style = Style::default().fg(SEPARATOR);
         // ┬ on the separator line above, connecting downward into the M|S split
-        // │ on the button row between M and S/-> A
+        // │ on the button row between M and S/swap A
         // Note: bottom junction for CUE is handled by render_cue_pane separator
         if area.y > 0 {
             buf.set_string(sep_x, area.y - 1, "┬", sep_style);
@@ -766,8 +895,16 @@ impl<'a> ChannelStrip<'a> {
         buf.set_string(sep_x, area.y, "│", sep_style);
 
         // Highlight background for active toggles (with 1-cell padding on edges)
-        let active_m_bg = if self.channel.muted { Some(STATUS_MUTED) } else { None };
-        let active_s_bg = if right_active { Some(BORDER_ACTIVE) } else { None };
+        let active_m_bg = if self.channel.muted {
+            Some(STATUS_MUTED)
+        } else {
+            None
+        };
+        let active_s_bg = if right_active {
+            Some(BORDER_ACTIVE)
+        } else {
+            None
+        };
 
         // Fill M column background if active (skip first and last cell)
         if let Some(bg) = active_m_bg {
@@ -775,7 +912,7 @@ impl<'a> ChannelStrip<'a> {
                 buf.set_string(x, area.y, " ", Style::default().bg(bg));
             }
         }
-        // Fill S/-> A column background if active (skip first and last cell)
+        // Fill S/swap A column background if active (skip first and last cell)
         if let Some(bg) = active_s_bg {
             for x in sep_x + 2..area.x + area.width - 1 {
                 buf.set_string(x, area.y, " ", Style::default().bg(bg));
@@ -792,7 +929,7 @@ impl<'a> ChannelStrip<'a> {
         };
         buf.set_string(m_x, area.y, "M", m_style);
 
-        // S - Solo (or -> A for CUE)
+        // S - Solo (or swap A for CUE)
         let s_style = if right_active {
             Style::default().fg(Color::Black).bg(BORDER_ACTIVE)
         } else if self.is_control_selected(right_control) {
@@ -814,6 +951,7 @@ pub struct MasterStrip<'a> {
     frame: u8,
     /// True if any deck or CUE channel has playing == true
     any_channel_playing: bool,
+    mic_input_device: Option<&'a str>,
 }
 
 impl<'a> MasterStrip<'a> {
@@ -826,6 +964,7 @@ impl<'a> MasterStrip<'a> {
             editing: false,
             frame: 0,
             any_channel_playing: false,
+            mic_input_device: None,
         }
     }
 
@@ -854,6 +993,11 @@ impl<'a> MasterStrip<'a> {
 
     pub fn any_channel_playing(mut self, v: bool) -> Self {
         self.any_channel_playing = v;
+        self
+    }
+
+    pub fn mic_input_device(mut self, device: Option<&'a str>) -> Self {
+        self.mic_input_device = device;
         self
     }
 
@@ -888,8 +1032,8 @@ impl<'a> MasterStrip<'a> {
                 break;
             }
 
-            let band_selected = eq_selected
-                && self.selected_control == Some(GlobalControl::all_eq_variants()[i]);
+            let band_selected =
+                eq_selected && self.selected_control == Some(GlobalControl::all_eq_variants()[i]);
             let band_editing = band_selected && eq_editing;
 
             let peak = self.master.spectrum_peaks[i];
@@ -919,14 +1063,23 @@ impl<'a> MasterStrip<'a> {
 
                 let color_for_step = |step: u16| -> Color {
                     let pct = step as f32 / total_steps as f32;
-                    if pct > 0.90 { Color::Red }
-                    else if pct > 0.80 { Color::Rgb(255, 140, 0) }
-                    else if pct > 0.65 { Color::Yellow }
-                    else { Color::Green }
+                    if pct > 0.90 {
+                        Color::Red
+                    } else if pct > 0.80 {
+                        Color::Rgb(255, 140, 0)
+                    } else if pct > 0.65 {
+                        Color::Yellow
+                    } else {
+                        Color::Green
+                    }
                 };
 
                 if gain_in_upper || gain_in_lower {
-                    let gain_color = if band_editing { TEXT_EDITING } else { Color::White };
+                    let gain_color = if band_editing {
+                        TEXT_EDITING
+                    } else {
+                        Color::White
+                    };
                     let gain_style = Style::default().fg(gain_color).add_modifier(Modifier::BOLD);
                     let handle_char = if band_selected { "◆" } else { "─" };
                     buf.set_string(bar_x, y, handle_char, gain_style);
@@ -973,7 +1126,9 @@ impl<'a> Widget for MasterStrip<'a> {
         };
 
         let title_style = if self.pane_selected {
-            Style::default().fg(BORDER_ACTIVE).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(BORDER_ACTIVE)
+                .add_modifier(Modifier::BOLD)
         } else {
             border_style
         };
@@ -981,10 +1136,7 @@ impl<'a> Widget for MasterStrip<'a> {
         let block = Block::default()
             .borders(Borders::ALL)
             .border_style(border_style)
-            .title(Span::styled(
-                " M ",
-                title_style,
-            ));
+            .title(Span::styled(" M ", title_style));
 
         let inner = block.inner(area);
         block.render(area, buf);
@@ -996,9 +1148,13 @@ impl<'a> Widget for MasterStrip<'a> {
                 Constraint::Length(1), // Separator
                 Constraint::Length(5), // EQ bars
                 Constraint::Length(1), // Separator
-                Constraint::Min(6),    // Meters and fader
+                Constraint::Length(1), // Mic volume slider with icon
                 Constraint::Length(1), // Separator
-                Constraint::Length(1), // M | OUT
+                Constraint::Length(1), // INPUT button (mic input selector)
+                Constraint::Length(1), // Separator
+                Constraint::Min(5),    // Meters and fader (reduced from 6 to 5)
+                Constraint::Length(1), // Separator
+                Constraint::Length(1), // M | OUT buttons (single row)
             ])
             .split(inner);
 
@@ -1030,9 +1186,13 @@ impl<'a> Widget for MasterStrip<'a> {
         };
 
         let dim = Style::default().fg(Color::Rgb(35, 35, 35));
-        let glow = Style::default().fg(STATUS_PLAYING).add_modifier(Modifier::BOLD);
+        let glow = Style::default()
+            .fg(STATUS_PLAYING)
+            .add_modifier(Modifier::BOLD);
         let trail = Style::default().fg(STATUS_PLAYING);
-        let sel_glow = Style::default().fg(BORDER_ACTIVE).add_modifier(Modifier::BOLD);
+        let sel_glow = Style::default()
+            .fg(BORDER_ACTIVE)
+            .add_modifier(Modifier::BOLD);
         let sel_ring = Style::default().fg(BORDER_ACTIVE);
 
         // Generate ring positions: top-left corner, top edge, top-right corner,
@@ -1065,11 +1225,19 @@ impl<'a> Widget for MasterStrip<'a> {
             let prev = (i + num_segments - 1) % num_segments;
             let next = (i + 1) % num_segments;
             let style = if pp_selected {
-                if playing && i == highlight_pos { sel_glow } else { sel_ring }
+                if playing && i == highlight_pos {
+                    sel_glow
+                } else {
+                    sel_ring
+                }
             } else if playing {
-                if i == highlight_pos { glow }
-                else if i == prev || i == next { trail }
-                else { dim }
+                if i == highlight_pos {
+                    glow
+                } else if i == prev || i == next {
+                    trail
+                } else {
+                    dim
+                }
             } else {
                 dim
             };
@@ -1079,9 +1247,13 @@ impl<'a> Widget for MasterStrip<'a> {
         // Center: play / pause icon
         let center_char = if playing { "▶" } else { "󰏤" };
         let center_style = if pp_selected {
-            Style::default().fg(BORDER_ACTIVE).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(BORDER_ACTIVE)
+                .add_modifier(Modifier::BOLD)
         } else if playing {
-            Style::default().fg(STATUS_PLAYING).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(STATUS_PLAYING)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(TEXT_DIM)
         };
@@ -1125,58 +1297,129 @@ impl<'a> Widget for MasterStrip<'a> {
             }
         }
 
-        // ── Stereo meter and fader ─────────────────────────────
-        let meter_fader = Layout::default()
+        // ── MIC volume slider with mute icon ───────────────────
+        let mic_slider_area = chunks[4];
+        let mic_mute_selected = self.selected_control == Some(GlobalControl::MicMute);
+        let mic_fader_selected = self.selected_control == Some(GlobalControl::MicFader);
+        let mic_fader_editing = self.is_control_editing(GlobalControl::MicFader);
+        
+        // Space + Mute icon + space (total: 3 chars)
+        let mic_icon = if self.master.mic_muted { "󰍭" } else { "󰍬" };
+        let mic_icon_style = if mic_mute_selected {
+            Style::default().fg(TEXT_EDITING).add_modifier(Modifier::BOLD)
+        } else if self.master.mic_muted {
+            Style::default().fg(STATUS_MUTED)
+        } else {
+            Style::default().fg(TEXT_DIM)
+        };
+        buf.set_string(mic_slider_area.x, mic_slider_area.y, " ", mic_icon_style);
+        buf.set_string(mic_slider_area.x + 1, mic_slider_area.y, mic_icon, mic_icon_style);
+        buf.set_string(mic_slider_area.x + 2, mic_slider_area.y, " ", Style::default().fg(TEXT_DIM));
+        
+        // Slider fills the rest of the width (with leading space + icon + gap + trailing space)
+        let slider_x = mic_slider_area.x + 3;
+        let slider_width = mic_slider_area.width.saturating_sub(4); // -4 for space + icon + gap + trailing space
+        let filled = (self.master.mic_fader * slider_width as f32) as usize;
+        
+        let slider_fg = if mic_fader_editing {
+            TEXT_EDITING
+        } else if mic_fader_selected {
+            TEXT_BRIGHT
+        } else {
+            TEXT_DIM
+        };
+        let slider_style = if mic_fader_selected {
+            Style::default().fg(slider_fg).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(slider_fg)
+        };
+        
+        for i in 0..slider_width as usize {
+            let ch = if i < filled { "\u{2501}" } else { "\u{2500}" };
+            buf.set_string(slider_x + i as u16, mic_slider_area.y, ch, slider_style);
+        }
+
+        // ── Separator below mic slider ─────────────────────────
+        let sep_mic_y = chunks[5].y;
+        for x in chunks[5].x..chunks[5].x + chunks[5].width {
+            buf.set_string(x, sep_mic_y, "─", Style::default().fg(SEPARATOR));
+        }
+
+        // ── INPUT button (mic input selector) ──────────────────
+        let input_area = chunks[6];
+        let input_selected = self.selected_control == Some(GlobalControl::MicInputSelect);
+        let input_style = if input_selected {
+            Style::default().fg(TEXT_EDITING)
+        } else {
+            Style::default().fg(TEXT_DIM)
+        };
+        let input_label = "INPUT";
+        let input_x = input_area.x + (input_area.width.saturating_sub(input_label.len() as u16)) / 2;
+        buf.set_string(input_x, input_area.y, input_label, input_style);
+
+        // ── Separator below INPUT ──────────────────────────────
+        let sep_input_y = chunks[7].y;
+        for x in input_area.x..input_area.x + input_area.width {
+            buf.set_string(x, sep_input_y, "─", Style::default().fg(SEPARATOR));
+        }
+
+        // ── MASTER gain (meter + fader) ────────────────────────
+        let master_gain_area = chunks[8];
+        let master_gain = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Length(3), Constraint::Min(3)])
-            .split(chunks[4]);
-
+            .split(master_gain_area);
+        
         LevelMeter::new(0.0)
             .stereo(self.master.rms_left, self.master.rms_right)
             .peaks(self.master.peak_left, self.master.peak_right)
-            .render(meter_fader[0], buf);
+            .render(master_gain[0], buf);
 
         let db = self.master.fader_db();
-        let db_label = if db <= -60.0 { "∞".to_string() } else { format!("{:+.0}", db) };
+        let db_label = if db <= -60.0 {
+            "∞".to_string()
+        } else {
+            format!("{:+.0}", db)
+        };
         let fader_selected = self.selected_control == Some(GlobalControl::MasterFader);
         Fader::new(self.master.fader)
             .selected(fader_selected)
             .editing(self.is_control_editing(GlobalControl::MasterFader))
             .label(db_label)
-            .render(meter_fader[1], buf);
+            .render(master_gain[1], buf);
 
         // ── Separator before buttons ──────────────────────────
-        let sep_y = chunks[5].y;
-        for x in chunks[5].x..chunks[5].x + chunks[5].width {
+        let sep_y = chunks[9].y;
+        for x in chunks[8].x..chunks[8].x + chunks[8].width {
             buf.set_string(x, sep_y, "─", Style::default().fg(SEPARATOR));
         }
 
-        // ── M | OUT button row ────────────────────────────────
-        let btn_area = chunks[6];
-        if btn_area.width >= 3 {
-            let sep_x = btn_area.x + btn_area.width / 2;
-            let left_w = sep_x - btn_area.x;
-            let right_w = btn_area.x + btn_area.width - sep_x - 1;
-
-            let m_x = btn_area.x + 1 + (left_w.saturating_sub(2)) / 2;
-            let out_x = sep_x + 1 + (right_w.saturating_sub(3)) / 2;
-
+        // ── M | OUT button row ─────────────────────────────────
+        let btn_area = chunks[10];
+        if btn_area.width >= 5 && btn_area.height >= 1 {
+            // Two equal sections: M | OUT
+            let section_width = btn_area.width / 2;
+            let sep_x = btn_area.x + section_width;
+            
             let sep_style = Style::default().fg(SEPARATOR);
-            // Connect separator to borders: ┬ above, │ in row (no ┴ below - shares pane border)
+            
+            // Draw separator
             if btn_area.y > 0 {
                 buf.set_string(sep_x, btn_area.y - 1, "┬", sep_style);
             }
             buf.set_string(sep_x, btn_area.y, "│", sep_style);
-
-            // Fill M column background if muted
+            
+            // M (Master Mute) - first section (centered)
+            let m_selected = self.selected_control == Some(GlobalControl::MasterMute);
+            let m_x = btn_area.x + (section_width.saturating_sub(1)) / 2;
+            
+            // Fill M column background if muted (skip first and last cell for padding)
             if self.master.muted {
                 for x in btn_area.x + 1..sep_x.saturating_sub(1) {
                     buf.set_string(x, btn_area.y, " ", Style::default().bg(STATUS_MUTED));
                 }
             }
-
-            // M - Mute
-            let m_selected = self.selected_control == Some(GlobalControl::MasterMute);
+            
             let m_style = if self.master.muted {
                 Style::default().fg(Color::Black).bg(STATUS_MUTED)
             } else if m_selected {
@@ -1185,15 +1428,20 @@ impl<'a> Widget for MasterStrip<'a> {
                 Style::default().fg(TEXT_DIM)
             };
             buf.set_string(m_x, btn_area.y, "M", m_style);
-
-            // OUT - Output Select
+            
+            // OUT (Master Output) - second section (centered)
+            // The OUT section spans from sep_x+1 to the end of btn_area
             let out_selected = self.selected_control == Some(GlobalControl::MasterOutputSelect);
+            let out_label = "OUT";
+            let out_section_width = btn_area.width - section_width - 1; // remaining width after M section and separator
+            let out_x = sep_x + 1 + (out_section_width.saturating_sub(out_label.len() as u16)) / 2;
+            
             let out_style = if out_selected {
                 Style::default().fg(TEXT_EDITING)
             } else {
                 Style::default().fg(TEXT_DIM)
             };
-            buf.set_string(out_x, btn_area.y, "OUT", out_style);
+            buf.set_string(out_x, btn_area.y, out_label, out_style);
         }
     }
 }

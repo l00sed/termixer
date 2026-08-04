@@ -15,9 +15,9 @@ use app::App;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use ratatui::{backend::CrosstermBackend, layout::Rect, prelude::Backend, Terminal};
+use ratatui::{Terminal, backend::CrosstermBackend, layout::Rect, prelude::Backend};
 use std::io::stdout;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -54,6 +54,8 @@ fn main() -> Result<()> {
     // visible if the TUI never starts.
     match crate::audio::engine::AudioEngine::new() {
         Ok(engine) => {
+            engine.set_mic_gain(app.mixer.master.mic_fader * 2.0);
+            engine.set_mic_muted(true);
             app.audio_engine = Some(engine);
         }
         Err(e) => {
@@ -180,11 +182,17 @@ fn parse_args(args: &[String]) -> CliArgs {
 
     // Default music dir to ~/Music when not provided
     if music_dir.is_none()
-        && let Ok(home) = std::env::var("HOME") {
-            music_dir = Some(PathBuf::from(home).join("Music"));
-        }
+        && let Ok(home) = std::env::var("HOME")
+    {
+        music_dir = Some(PathBuf::from(home).join("Music"));
+    }
 
-    CliArgs { sources, auto_discover, music_dir, samples_dir }
+    CliArgs {
+        sources,
+        auto_discover,
+        music_dir,
+        samples_dir,
+    }
 }
 
 /// Discover audio sources (MPV sockets, PulseAudio, etc.)
@@ -194,7 +202,7 @@ fn discover_sources() -> Vec<(String, String)> {
 
     sources
         .iter()
-        .filter(|s| s.source_type == SourceType::Mpv)  // Start with MPV only
+        .filter(|s| s.source_type == SourceType::Mpv) // Start with MPV only
         .map(|s| (s.name.clone(), s.identifier.clone()))
         .collect()
 }
@@ -260,7 +268,10 @@ MOUSE:
     );
 }
 
-fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> where <B as Backend>::Error: Send + Sync + 'static {
+fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()>
+where
+    <B as Backend>::Error: Send + Sync + 'static,
+{
     let mut frame_counter: u8 = 0;
     let mut next_tick = Instant::now() + app.tick_rate;
     let mut play_steps: Vec<usize> = Vec::with_capacity(8);
@@ -274,14 +285,31 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
 
         // Draw
         terminal.draw(|frame| {
-            let control_select = matches!(app.mode, app::AppMode::ControlSelect | app::AppMode::Edit);
+            let control_select =
+                matches!(app.mode, app::AppMode::ControlSelect | app::AppMode::Edit);
             let pad_config = app.mode == app::AppMode::SamplePadConfig;
-            let confirm_action = if let app::AppMode::ConfirmAction(a) = app.mode { Some(a) } else { None };
+            let confirm_action = if let app::AppMode::ConfirmAction(a) = app.mode {
+                Some(a)
+            } else {
+                None
+            };
             let confirm_selected = app.confirm_selected;
 
             // Bind device lists to extend lifetime
             let master_devices = app.master_output.devices();
             let cue_devices = app.cue_output.devices();
+            let mic_devices: Vec<String> = app
+                .mic_input_devices
+                .iter()
+                .map(|device| device.display_name.clone())
+                .collect();
+            let selected_mic_device = app.audio_engine.as_ref().and_then(|engine| {
+                let selected = engine.selected_mic_input()?;
+                app.mic_input_devices
+                    .iter()
+                    .find(|device| device.index == selected)
+                    .map(|device| device.display_name.as_str())
+            });
 
             play_steps.clear();
             play_steps.extend(app.sequence_state.sequences.iter().map(|s| s.current_step));
@@ -300,12 +328,15 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                 .layout_start_end(Some((app.mixer_window_start, app.mixer_window_end)))
                 .master_output_device(app.master_output.selected_device())
                 .cue_output_device(app.cue_output.selected_device())
+                .mic_input_device(selected_mic_device)
                 .output_picker_active(app.output_picker_active)
                 .output_picker_target(app.output_picker_target)
                 .master_output_devices(&master_devices)
                 .cue_output_devices(&cue_devices)
+                .mic_input_devices(&mic_devices)
                 .selected_master_output_idx(app.selected_master_output_idx)
                 .selected_cue_output_idx(app.selected_cue_output_idx)
+                .selected_mic_input_idx(app.selected_mic_input_idx)
                 .confirm_action(confirm_action)
                 .confirm_selected(confirm_selected)
                 .help_scroll(app.help_scroll)
@@ -315,7 +346,9 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
 
             // Add source picker if active
             if let app::AppMode::SourcePicker(deck) = app.mode {
-                view = view.source_picker(deck, &app.source_picker);
+                view = view
+                    .source_picker(deck, &app.source_picker)
+                    .deck_queue_indices(&app.deck_queue_indices);
             }
 
             // Add sample picker if active
@@ -332,7 +365,13 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
             let (channel_areas, crossfader_area, master_area, cue_area, loops_area, pad_areas) =
                 calculate_all_areas(frame.area(), app.mixer.channels.len(), app.selected_pane);
             app.update_channel_areas(channel_areas);
-            app.update_pane_areas(crossfader_area, master_area, cue_area, loops_area, pad_areas);
+            app.update_pane_areas(
+                crossfader_area,
+                master_area,
+                cue_area,
+                loops_area,
+                pad_areas,
+            );
         })?;
 
         // Handle events
@@ -342,7 +381,9 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
             match event::read()? {
                 Event::Key(key) => {
                     // Ctrl+c always quits
-                    if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                    if key.code == KeyCode::Char('c')
+                        && key.modifiers.contains(KeyModifiers::CONTROL)
+                    {
                         return Ok(());
                     }
                     app.handle_key(key);
@@ -383,10 +424,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
 
 /// Mini event loop for the config check dialog. Blocks until the user
 /// confirms or cancels, then returns to the caller.
-fn run_config_dialog<B: Backend>(
-    terminal: &mut Terminal<B>,
-    app: &mut App,
-) -> Result<()>
+fn run_config_dialog<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()>
 where
     <B as Backend>::Error: Send + Sync + 'static,
 {
@@ -406,7 +444,8 @@ where
             let popup_height = (10 + num_files).min(area.height.saturating_sub(4));
             let popup_x = area.x + (area.width.saturating_sub(popup_width)) / 2;
             let popup_y = area.y + (area.height.saturating_sub(popup_height)) / 2;
-            let popup_area = ratatui::layout::Rect::new(popup_x, popup_y, popup_width, popup_height);
+            let popup_area =
+                ratatui::layout::Rect::new(popup_x, popup_y, popup_width, popup_height);
 
             // Clear and draw background
             let buf = frame.buffer_mut();
@@ -414,7 +453,9 @@ where
             for y in popup_area.y..popup_area.y + popup_area.height {
                 for x in popup_area.x..popup_area.x + popup_area.width {
                     buf.set_string(
-                        x, y, " ",
+                        x,
+                        y,
+                        " ",
                         ratatui::style::Style::default().bg(ratatui::style::Color::Rgb(20, 20, 20)),
                     );
                 }
@@ -486,7 +527,8 @@ where
             } else {
                 ratatui::style::Style::default().fg(ratatui::style::Color::Rgb(100, 100, 100))
             };
-            let dim = ratatui::style::Style::default().fg(ratatui::style::Color::Rgb(100, 100, 100));
+            let dim =
+                ratatui::style::Style::default().fg(ratatui::style::Color::Rgb(100, 100, 100));
 
             lines.push(ratatui::text::Line::from(vec![
                 ratatui::text::Span::raw("    "),
@@ -505,12 +547,12 @@ where
             paragraph.render(inner, buf);
         })?;
 
-        if crossterm::event::poll(Duration::from_millis(50))? {
-            if let crossterm::event::Event::Key(key) = crossterm::event::read()? {
-                app.handle_config_check_key(key);
-                if !matches!(app.mode, app::AppMode::ConfigCheck) {
-                    break;
-                }
+        if crossterm::event::poll(Duration::from_millis(50))?
+            && let crossterm::event::Event::Key(key) = crossterm::event::read()?
+        {
+            app.handle_config_check_key(key);
+            if !matches!(app.mode, app::AppMode::ConfigCheck) {
+                break;
             }
         }
     }

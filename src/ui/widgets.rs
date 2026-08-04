@@ -73,7 +73,7 @@ impl Widget for Fader {
         for &pos in &tick_positions {
             let y = track_bottom - (pos * track_height as f32) as u16;
             if y >= track_top && y <= track_bottom {
-                let is_zero_db = (pos - 0.5).abs() < 0.01;  // 0dB at center (0.5)
+                let is_zero_db = (pos - 0.5).abs() < 0.01; // 0dB at center (0.5)
                 let is_top = (pos - 1.0).abs() < 0.01;
 
                 let (ch, style) = if is_zero_db {
@@ -251,7 +251,11 @@ impl DeckIndicator {
         self
     }
 
-    pub fn playlist_executed(mut self, prev_executed_recently: bool, next_executed_recently: bool) -> Self {
+    pub fn playlist_executed(
+        mut self,
+        prev_executed_recently: bool,
+        next_executed_recently: bool,
+    ) -> Self {
         self.prev_executed_recently = prev_executed_recently;
         self.next_executed_recently = next_executed_recently;
         self
@@ -273,7 +277,12 @@ impl Widget for DeckIndicator {
             } else {
                 Style::default().fg(Color::Rgb(40, 40, 40))
             };
-            buf.set_string(area.x + area.width / 2, area.y + area.height / 2, symbol, style);
+            buf.set_string(
+                area.x + area.width / 2,
+                area.y + area.height / 2,
+                symbol,
+                style,
+            );
             return;
         }
 
@@ -304,23 +313,25 @@ impl Widget for DeckIndicator {
         let dim_style = Style::default().fg(Color::Rgb(35, 35, 35));
         let active_style = Style::default().fg(self.color);
         let glow_style = Style::default().fg(self.color).add_modifier(Modifier::BOLD);
-        let selected_style = Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD);
+        let selected_style = Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD);
 
         // Draw outer ring (positions relative to center) - seamless 5x3
         // Complete ring with all segments connected
         let positions: [(i16, i16, &str); 12] = [
-            (-2, -1, "╭"),  // 0: top-left
-            (-1, -1, "─"),  // 1: top-left-center
-            (0, -1, "─"),   // 2: top-center
-            (1, -1, "─"),   // 3: top-right-center
-            (2, -1, "╮"),   // 4: top-right
-            (2, 0, "│"),    // 5: right
-            (2, 1, "╯"),    // 6: bottom-right
-            (1, 1, "─"),    // 7: bottom-right-center
-            (0, 1, "─"),    // 8: bottom-center
-            (-1, 1, "─"),   // 9: bottom-left-center
-            (-2, 1, "╰"),   // 10: bottom-left
-            (-2, 0, "│"),   // 11: left
+            (-2, -1, "╭"), // 0: top-left
+            (-1, -1, "─"), // 1: top-left-center
+            (0, -1, "─"),  // 2: top-center
+            (1, -1, "─"),  // 3: top-right-center
+            (2, -1, "╮"),  // 4: top-right
+            (2, 0, "│"),   // 5: right
+            (2, 1, "╯"),   // 6: bottom-right
+            (1, 1, "─"),   // 7: bottom-right-center
+            (0, 1, "─"),   // 8: bottom-center
+            (-1, 1, "─"),  // 9: bottom-left-center
+            (-2, 1, "╰"),  // 10: bottom-left
+            (-2, 0, "│"),  // 11: left
         ];
 
         for (i, (dx, dy, ch)) in positions.iter().enumerate() {
@@ -354,9 +365,9 @@ impl Widget for DeckIndicator {
         // When scrubbing, show direction instead of play/pause
         let center_char = if self.connected {
             if self.scrub_direction < 0.0 {
-                "󰑟"  // Nerd Font rewind
+                "󰑟" // Nerd Font rewind
             } else if self.scrub_direction > 0.0 {
-                "󰈑"  // Nerd Font fast-forward
+                "󰈑" // Nerd Font fast-forward
             } else if self.playing {
                 "▶"
             } else {
@@ -368,7 +379,9 @@ impl Widget for DeckIndicator {
         };
 
         let center_style = if self.selected {
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
         } else if self.playing {
             Style::default().fg(self.color).add_modifier(Modifier::BOLD)
         } else if self.connected {
@@ -387,9 +400,13 @@ impl Widget for DeckIndicator {
 
             if left_x >= area.x {
                 let style = if self.prev_executed_recently {
-                    Style::default().fg(TEXT_EDITING).add_modifier(Modifier::BOLD)
+                    Style::default()
+                        .fg(TEXT_EDITING)
+                        .add_modifier(Modifier::BOLD)
                 } else if self.prev_selected {
-                    Style::default().fg(TEXT_BRIGHT).add_modifier(Modifier::BOLD)
+                    Style::default()
+                        .fg(TEXT_BRIGHT)
+                        .add_modifier(Modifier::BOLD)
                 } else if !self.has_prev_track {
                     Style::default().fg(Color::Rgb(70, 70, 70))
                 } else {
@@ -399,9 +416,13 @@ impl Widget for DeckIndicator {
             }
             if right_x < area.x + area.width {
                 let style = if self.next_executed_recently {
-                    Style::default().fg(TEXT_EDITING).add_modifier(Modifier::BOLD)
+                    Style::default()
+                        .fg(TEXT_EDITING)
+                        .add_modifier(Modifier::BOLD)
                 } else if self.next_selected {
-                    Style::default().fg(TEXT_BRIGHT).add_modifier(Modifier::BOLD)
+                    Style::default()
+                        .fg(TEXT_BRIGHT)
+                        .add_modifier(Modifier::BOLD)
                 } else if !self.has_next_track {
                     Style::default().fg(Color::Rgb(70, 70, 70))
                 } else {
@@ -518,7 +539,12 @@ impl Widget for Crossfader {
 
         // Draw track
         let track_style = Style::default().fg(METER_TRACK);
-        buf.set_string(track_left, track_y, "─".repeat(track_width as usize), track_style);
+        buf.set_string(
+            track_left,
+            track_y,
+            "─".repeat(track_width as usize),
+            track_style,
+        );
 
         // Draw end caps (junction characters)
         buf.set_string(track_left - 1, track_y, "├", track_style);
@@ -529,16 +555,12 @@ impl Widget for Crossfader {
         for &pos in &tick_positions {
             let x = track_left + ((pos + 1.0) / 2.0 * track_width as f32) as u16;
             if x >= track_left && x <= track_right {
-                let is_center = pos.abs() < 0.01;  // Center position (0.0)
-                let is_end = (pos + 1.0).abs() < 0.01 || (pos - 1.0).abs() < 0.01;  // -1.0 or 1.0
+                let is_center = pos.abs() < 0.01; // Center position (0.0)
+                let is_end = (pos + 1.0).abs() < 0.01 || (pos - 1.0).abs() < 0.01; // -1.0 or 1.0
 
                 // Skip the left end tick (would be at track_left, overlapping junction)
                 // Instead draw it one position to the right
-                let adjusted_x = if (pos + 1.0).abs() < 0.01 {
-                    x + 1
-                } else {
-                    x
-                };
+                let adjusted_x = if (pos + 1.0).abs() < 0.01 { x + 1 } else { x };
 
                 if is_center {
                     // Center: 3 characters tall (above, on, below) in bright white
@@ -561,14 +583,21 @@ impl Widget for Crossfader {
         // Draw deck labels
         let label_style = Style::default().fg(TEXT_DEFAULT);
         buf.set_string(area.x, track_y, &self.label_a, label_style);
-        buf.set_string(area.x + area.width - self.label_b.len() as u16, track_y, &self.label_b, label_style);
+        buf.set_string(
+            area.x + area.width - self.label_b.len() as u16,
+            track_y,
+            &self.label_b,
+            label_style,
+        );
 
         // Draw fader cap
         let cap_pos = ((self.position + 1.0) / 2.0 * track_width as f32) as u16;
         let cap_x = track_left + cap_pos;
 
         let cap_style = if self.selected {
-            Style::default().fg(BORDER_ACTIVE).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(BORDER_ACTIVE)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(TEXT_BRIGHT)
         };
@@ -578,7 +607,6 @@ impl Widget for Crossfader {
         buf.set_string(cap_x.saturating_sub(1), track_y + 1, "└─┘", cap_style);
     }
 }
-
 
 /// Level meter widget (VU meter style)
 pub struct LevelMeter {
@@ -648,14 +676,14 @@ impl Widget for LevelMeter {
             // total_steps = meter_height * 2 (upper + lower half per cell).
             let total_steps = (meter_height * 2.0) as u16;
             let level_steps = (level * total_steps as f32) as u16;
-                // Scale peak hold slightly so peak marker reaches true top when near 1.0
-                let peak_display_scale: f32 = 0.98;
-                let peak_step = if peak > 0.0 {
-                    let s = (peak * peak_display_scale * total_steps as f32) as u16;
-                    Some(s.clamp(0, total_steps - 1))
-                } else {
-                    None
-                };
+            // Scale peak hold slightly so peak marker reaches true top when near 1.0
+            let peak_display_scale: f32 = 0.98;
+            let peak_step = if peak > 0.0 {
+                let s = (peak * peak_display_scale * total_steps as f32) as u16;
+                Some(s.clamp(0, total_steps - 1))
+            } else {
+                None
+            };
 
             for row in 0..(meter_height as u16) {
                 let y = meter_bottom - row;
@@ -721,8 +749,18 @@ impl Widget for LevelMeter {
 
             // Draw L/R labels below top padding
             if area.height >= 4 {
-                buf.set_string(left_x, area.y + 1, "L", Style::default().fg(Color::DarkGray));
-                buf.set_string(right_x, area.y + 1, "R", Style::default().fg(Color::DarkGray));
+                buf.set_string(
+                    left_x,
+                    area.y + 1,
+                    "L",
+                    Style::default().fg(Color::DarkGray),
+                );
+                buf.set_string(
+                    right_x,
+                    area.y + 1,
+                    "R",
+                    Style::default().fg(Color::DarkGray),
+                );
             }
         } else {
             let x = area.x + area.width / 2;

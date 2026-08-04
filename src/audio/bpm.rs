@@ -3,7 +3,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use stratum_dsp::{analyze_audio, AnalysisConfig};
+use stratum_dsp::{AnalysisConfig, analyze_audio};
 use symphonia::core::audio::SampleBuffer;
 use symphonia::core::codecs::DecoderOptions;
 use symphonia::core::formats::FormatOptions;
@@ -83,7 +83,9 @@ pub fn parse_camelot(s: &str) -> Option<(usize, bool)> {
 }
 
 /// Read key from metadata tags (ID3v2 TKEY, Vorbis INITIALKEY/KEY)
-fn read_key_from_metadata(format: &mut Box<dyn symphonia::core::formats::FormatReader>) -> Option<String> {
+fn read_key_from_metadata(
+    format: &mut Box<dyn symphonia::core::formats::FormatReader>,
+) -> Option<String> {
     let metadata = format.metadata();
     let current = metadata.current()?;
     let tags = current.tags();
@@ -183,9 +185,13 @@ pub fn detect_key_from_audio(samples: &[f32], sample_rate: u32) -> Option<String
 
     // Krumhansl-Schmuckler key profiles
     // Major profile: [0, 0, 1, 1, 1, 0, 1, 0, 1, 1, 1, 0]
-    let major_profile = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88];
+    let major_profile = [
+        6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88,
+    ];
     // Minor profile: [0, 0, 1, 1, 1, 0, 1, 0, 1, 1, 1, 0]
-    let minor_profile = [6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17];
+    let minor_profile = [
+        6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17,
+    ];
 
     let mut window = vec![0.0f32; fft_size];
     let mut num_frames = 0u32;
@@ -206,7 +212,8 @@ pub fn detect_key_from_audio(samples: &[f32], sample_rate: u32) -> Option<String
             let mut energy = 0.0f32;
 
             for octave in 2..=7 {
-                let freq = 440.0 * 2.0f32.powf((pc as f32 - 9.0 + (octave as f32 - 4.0) * 12.0) / 12.0);
+                let freq =
+                    440.0 * 2.0f32.powf((pc as f32 - 9.0 + (octave as f32 - 4.0) * 12.0) / 12.0);
                 if freq >= sample_rate as f32 * 0.5 {
                     break;
                 }
@@ -275,7 +282,13 @@ pub fn detect_key_from_audio(samples: &[f32], sample_rate: u32) -> Option<String
     }
 
     let detected = Some(pitch_class_to_camelot(best_pc, best_major));
-    tracing::debug!("Audio key detection: pc={}, major={}, score={:.3}, result={:?}", best_pc, best_major, best_score, detected);
+    tracing::debug!(
+        "Audio key detection: pc={}, major={}, score={:.3}, result={:?}",
+        best_pc,
+        best_major,
+        best_score,
+        detected
+    );
     detected
 }
 
@@ -300,10 +313,7 @@ pub struct BpmAnalyzer;
 
 impl BpmAnalyzer {
     /// Analyze an audio file in a background thread. Calls `on_result` when done.
-    pub fn analyze_file(
-        path: &Path,
-        on_result: BpmCallback,
-    ) {
+    pub fn analyze_file(path: &Path, on_result: BpmCallback) {
         let path = path.to_path_buf();
         thread::spawn(move || {
             let result = Self::decode_and_analyze(&path);
@@ -352,7 +362,7 @@ impl BpmAnalyzer {
                 Err(symphonia::core::errors::Error::IoError(ref e))
                     if e.kind() == std::io::ErrorKind::UnexpectedEof =>
                 {
-                    break
+                    break;
                 }
                 Err(_) => break,
             };
@@ -365,7 +375,8 @@ impl BpmAnalyzer {
                 Ok(audio_buf) => {
                     let spec = *audio_buf.spec();
                     let num_channels = spec.channels.count() as u32;
-                    let mut sample_buf = SampleBuffer::<f32>::new(audio_buf.capacity() as u64, spec);
+                    let mut sample_buf =
+                        SampleBuffer::<f32>::new(audio_buf.capacity() as u64, spec);
                     sample_buf.copy_interleaved_ref(audio_buf);
 
                     // Mix down to mono
@@ -390,17 +401,26 @@ impl BpmAnalyzer {
             return Err("No samples decoded".to_string());
         }
 
-        let result =
-            analyze_audio(&samples, sample_rate, AnalysisConfig::default()).map_err(|e| e.to_string())?;
+        let result = analyze_audio(&samples, sample_rate, AnalysisConfig::default())
+            .map_err(|e| e.to_string())?;
 
         // Use metadata key if available, otherwise detect from audio
         let key = if meta_key.is_some() {
             tracing::debug!("Using metadata key for {}: {:?}", path.display(), meta_key);
             meta_key
         } else {
-            tracing::debug!("No metadata key for {}, attempting audio analysis ({} samples, {}Hz)", path.display(), samples.len(), sample_rate);
+            tracing::debug!(
+                "No metadata key for {}, attempting audio analysis ({} samples, {}Hz)",
+                path.display(),
+                samples.len(),
+                sample_rate
+            );
             let detected = detect_key_from_audio(&samples, sample_rate);
-            tracing::debug!("Audio key detection result for {}: {:?}", path.display(), detected);
+            tracing::debug!(
+                "Audio key detection result for {}: {:?}",
+                path.display(),
+                detected
+            );
             detected
         };
 

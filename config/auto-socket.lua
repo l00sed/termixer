@@ -110,13 +110,19 @@ local function write_route_metadata()
     local title = get_tag(metadata, {"title", "TITLE"}) or media_title
     local artist = get_tag(metadata, {"artist", "ARTIST"})
     local album = get_tag(metadata, {"album", "ALBUM"})
+    local duration = mp.get_property_number("duration", 0)
+    local playlist_pos = mp.get_property_number("playlist-pos", 0)
+    local playlist_count = mp.get_property_number("playlist-count", 0)
 
     local body = string.format(
-        '{"media_title":"%s","title":"%s","artist":"%s","album":"%s"}',
+        '{"media_title":"%s","title":"%s","artist":"%s","album":"%s","duration":%g,"playlist_pos":%d,"playlist_count":%d}',
         json_escape(media_title),
         json_escape(title),
         json_escape(artist),
-        json_escape(album)
+        json_escape(album),
+        duration,
+        playlist_pos,
+        playlist_count
     )
 
     local f = io.open(META_PATH, "w")

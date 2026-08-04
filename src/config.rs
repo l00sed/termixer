@@ -84,11 +84,11 @@ pub fn apply_config_files(diffs: &[ConfigDiff]) -> Vec<String> {
         let src = dir.join(file.repo_name);
         let dst = &file.install_path;
 
-        if let Some(parent) = dst.parent() {
-            if let Err(e) = std::fs::create_dir_all(parent) {
-                errors.push(format!("{}: mkdir: {}", file.label, e));
-                continue;
-            }
+        if let Some(parent) = dst.parent()
+            && let Err(e) = std::fs::create_dir_all(parent)
+        {
+            errors.push(format!("{}: mkdir: {}", file.label, e));
+            continue;
         }
 
         if let Err(e) = std::fs::copy(&src, dst) {
@@ -137,7 +137,8 @@ pub fn ensure_local_bin_in_path() -> Option<String> {
             }
 
             let entry = format!("\n{}\nexport PATH=\"{}:$PATH\"\n", marker, local_bin);
-            if let Err(e) = std::fs::write(&rc_path, format!("{}\n{}", contents.trim_end(), entry)) {
+            if let Err(e) = std::fs::write(&rc_path, format!("{}\n{}", contents.trim_end(), entry))
+            {
                 return Some(format!("Failed to update {}: {}", rc_name, e));
             }
             return Some(format!(

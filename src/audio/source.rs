@@ -16,7 +16,9 @@ pub struct AudioSourceManager {
 
 impl AudioSourceManager {
     pub fn new() -> Self {
-        Self { sources: Vec::new() }
+        Self {
+            sources: Vec::new(),
+        }
     }
 
     pub fn add_source(&mut self, source: AudioSource) {

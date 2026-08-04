@@ -11,9 +11,9 @@
 use std::io::Read;
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, Receiver};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver};
 use std::thread;
 
 /// A background thread reading interleaved stereo f32le PCM from a FIFO
@@ -29,10 +29,7 @@ pub struct PipeCaptureThread {
 impl PipeCaptureThread {
     /// Open the FIFO and start pumping samples into the rtrb producer.
     /// No resampling — MPV outputs at the correct rate already.
-    pub fn open_with_producer(
-        path: &Path,
-        producer: rtrb::Producer<f32>,
-    ) -> Result<Self, String> {
+    pub fn open_with_producer(path: &Path, producer: rtrb::Producer<f32>) -> Result<Self, String> {
         if !path.exists() {
             return Err(format!("FIFO not found: {}", path.display()));
         }
@@ -188,10 +185,16 @@ fn set_nonblocking(file: &std::fs::File) -> Result<(), String> {
     unsafe {
         let flags = libc::fcntl(fd, libc::F_GETFL);
         if flags < 0 {
-            return Err(format!("fcntl(F_GETFL): {}", std::io::Error::last_os_error()));
+            return Err(format!(
+                "fcntl(F_GETFL): {}",
+                std::io::Error::last_os_error()
+            ));
         }
         if libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) < 0 {
-            return Err(format!("fcntl(F_SETFL): {}", std::io::Error::last_os_error()));
+            return Err(format!(
+                "fcntl(F_SETFL): {}",
+                std::io::Error::last_os_error()
+            ));
         }
     }
     Ok(())

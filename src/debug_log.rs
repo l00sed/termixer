@@ -9,8 +9,8 @@ use std::collections::VecDeque;
 use std::io::Write;
 use std::sync::OnceLock;
 use tracing::{Event, Subscriber};
-use tracing_subscriber::layer::Context;
 use tracing_subscriber::Layer;
+use tracing_subscriber::layer::Context;
 use tracing_subscriber::prelude::*;
 
 /// Shared bounded queue for debug log messages (capacity: 256).
@@ -82,9 +82,7 @@ pub fn init_logging() {
 
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("debug"));
 
-    let subscriber = tracing_subscriber::registry()
-        .with(filter)
-        .with(DebugLayer);
+    let subscriber = tracing_subscriber::registry().with(filter).with(DebugLayer);
 
     // The global default can only be set once; ignore errors from repeated calls.
     let _ = tracing::subscriber::set_global_default(subscriber);

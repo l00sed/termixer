@@ -186,7 +186,7 @@ impl SamplePad {
             config: PadConfig::default(),
         }
     }
-    
+
     /// Get the key character for this pad
     pub fn key_char(&self) -> char {
         let row = self.index / 4;
@@ -220,7 +220,7 @@ pub struct SamplePadGrid {
 impl SamplePadGrid {
     pub fn new() -> Self {
         let pads = std::array::from_fn(SamplePad::new);
-        
+
         Self {
             pads,
             selected_pad: 0,
@@ -297,28 +297,30 @@ impl SamplePadGrid {
     pub fn config_control_up(&mut self) {
         let controls = PadControl::all();
         if let Some(pos) = controls.iter().position(|c| *c == self.selected_control)
-            && pos > 0 {
-                let mut new_pos = pos - 1;
-                // Skip over FiltersHeader (non-interactive)
-                while new_pos > 0 && controls[new_pos] == PadControl::FiltersHeader {
-                    new_pos -= 1;
-                }
-                self.selected_control = controls[new_pos];
+            && pos > 0
+        {
+            let mut new_pos = pos - 1;
+            // Skip over FiltersHeader (non-interactive)
+            while new_pos > 0 && controls[new_pos] == PadControl::FiltersHeader {
+                new_pos -= 1;
             }
+            self.selected_control = controls[new_pos];
+        }
     }
 
     /// Move config control selection down
     pub fn config_control_down(&mut self) {
         let controls = PadControl::all();
         if let Some(pos) = controls.iter().position(|c| *c == self.selected_control)
-            && pos + 1 < controls.len() {
-                let mut new_pos = pos + 1;
-                // Skip over FiltersHeader (non-interactive)
-                while new_pos < controls.len() - 1 && controls[new_pos] == PadControl::FiltersHeader {
-                    new_pos += 1;
-                }
-                self.selected_control = controls[new_pos];
+            && pos + 1 < controls.len()
+        {
+            let mut new_pos = pos + 1;
+            // Skip over FiltersHeader (non-interactive)
+            while new_pos < controls.len() - 1 && controls[new_pos] == PadControl::FiltersHeader {
+                new_pos += 1;
             }
+            self.selected_control = controls[new_pos];
+        }
     }
 
     /// Adjust the currently selected config control by delta
@@ -404,7 +406,7 @@ impl SamplePadGrid {
                     pad.triggered = false;
                 }
             }
-            
+
             // Clear playing after trigger decay
             if !pad.triggered {
                 pad.playing = false;
@@ -470,7 +472,6 @@ impl Sequence {
         let actual_bpm = global_bpm * self.tempo;
         60.0 / actual_bpm.clamp(20.0, 400.0) / 4.0
     }
-
 }
 
 /// Horizontal cursor target within a sequence row
@@ -483,7 +484,9 @@ pub enum EditTarget {
 
 impl EditTarget {
     /// Total number of targets: 16 steps + mute + gear
-    pub fn count() -> usize { SEQUENCE_STEPS + 2 }
+    pub fn count() -> usize {
+        SEQUENCE_STEPS + 2
+    }
 
     /// Index of this target in the flat horizontal layout
     pub fn index(&self) -> usize {
@@ -513,7 +516,11 @@ impl EditTarget {
 
     /// Move left (wrapping)
     pub fn left(&self) -> Self {
-        let next = if self.index() == 0 { Self::count() - 1 } else { self.index() - 1 };
+        let next = if self.index() == 0 {
+            Self::count() - 1
+        } else {
+            self.index() - 1
+        };
         Self::from_index(next)
     }
 }
@@ -528,7 +535,11 @@ pub struct GlobalSequenceControls {
 
 impl Default for GlobalSequenceControls {
     fn default() -> Self {
-        Self { volume: 0.8, bpm: 120.0, mute: false }
+        Self {
+            volume: 0.8,
+            bpm: 120.0,
+            mute: false,
+        }
     }
 }
 
@@ -586,7 +597,11 @@ impl SequenceState {
         self.sequences.push(seq);
         self.sort_sequences();
         // Find the newly added sequence by pad_idx (first match)
-        let idx = self.sequences.iter().position(|s| s.pad_idx == pad_idx).unwrap_or(0);
+        let idx = self
+            .sequences
+            .iter()
+            .position(|s| s.pad_idx == pad_idx)
+            .unwrap_or(0);
         self.selected = Some(idx);
         idx
     }
@@ -604,15 +619,18 @@ impl SequenceState {
             if self.sequences.is_empty() {
                 self.selected = None;
             } else if let Some(sel) = self.selected
-                && sel >= self.sequences.len() {
-                    self.selected = Some(self.sequences.len() - 1);
-                }
+                && sel >= self.sequences.len()
+            {
+                self.selected = Some(self.sequences.len() - 1);
+            }
         }
     }
 
     /// Move selection up (round-robin)
     pub fn select_up(&mut self) {
-        if self.sequences.is_empty() { return; }
+        if self.sequences.is_empty() {
+            return;
+        }
         if self.global_focused {
             self.global_focused = false;
             self.selected = Some(self.sequences.len() - 1);
@@ -634,7 +652,9 @@ impl SequenceState {
 
     /// Move selection down (round-robin)
     pub fn select_down(&mut self) {
-        if self.sequences.is_empty() { return; }
+        if self.sequences.is_empty() {
+            return;
+        }
         if self.global_focused {
             self.global_focused = false;
             self.selected = Some(0);
@@ -680,8 +700,15 @@ impl SequenceState {
             GlobalSequenceControl::Load,
             GlobalSequenceControl::Mute,
         ];
-        let idx = controls.iter().position(|&c| c == self.global_control).unwrap_or(0);
-        let new_idx = if idx == 0 { controls.len() - 1 } else { idx - 1 };
+        let idx = controls
+            .iter()
+            .position(|&c| c == self.global_control)
+            .unwrap_or(0);
+        let new_idx = if idx == 0 {
+            controls.len() - 1
+        } else {
+            idx - 1
+        };
         self.global_control = controls[new_idx];
     }
 
@@ -693,19 +720,27 @@ impl SequenceState {
             GlobalSequenceControl::Load,
             GlobalSequenceControl::Mute,
         ];
-        let idx = controls.iter().position(|&c| c == self.global_control).unwrap_or(0);
-        let new_idx = if idx + 1 >= controls.len() { 0 } else { idx + 1 };
+        let idx = controls
+            .iter()
+            .position(|&c| c == self.global_control)
+            .unwrap_or(0);
+        let new_idx = if idx + 1 >= controls.len() {
+            0
+        } else {
+            idx + 1
+        };
         self.global_control = controls[new_idx];
     }
 
     /// Toggle a step in the selected sequence
     pub fn toggle_step(&mut self, step: usize) {
         if let Some(sel) = self.selected
-            && let Some(seq) = self.sequences.get_mut(sel) {
-                seq.pattern[step] = !seq.pattern[step];
-                // Auto-play when any step is marked, auto-stop when all unmarked
-                seq.playing = seq.any_marked();
-            }
+            && let Some(seq) = self.sequences.get_mut(sel)
+        {
+            seq.pattern[step] = !seq.pattern[step];
+            // Auto-play when any step is marked, auto-stop when all unmarked
+            seq.playing = seq.any_marked();
+        }
     }
 }
 
@@ -740,16 +775,14 @@ impl SessionState {
     pub fn save_to_file(&self, path: &std::path::Path) -> Result<(), String> {
         let json = serde_json::to_string_pretty(self)
             .map_err(|e| format!("Failed to serialize session: {}", e))?;
-        std::fs::write(path, json)
-            .map_err(|e| format!("Failed to write file: {}", e))
+        std::fs::write(path, json).map_err(|e| format!("Failed to write file: {}", e))
     }
 
     /// Load session from a JSON file
     pub fn load_from_file(path: &std::path::Path) -> Result<Self, String> {
-        let json = std::fs::read_to_string(path)
-            .map_err(|e| format!("Failed to read file: {}", e))?;
-        serde_json::from_str(&json)
-            .map_err(|e| format!("Failed to parse session: {}", e))
+        let json =
+            std::fs::read_to_string(path).map_err(|e| format!("Failed to read file: {}", e))?;
+        serde_json::from_str(&json).map_err(|e| format!("Failed to parse session: {}", e))
     }
 }
 
@@ -760,7 +793,7 @@ mod tests {
     #[test]
     fn test_pad_keys() {
         let grid = SamplePadGrid::new();
-        
+
         assert_eq!(grid.pad_index_for_key('4'), Some(0));
         assert_eq!(grid.pad_index_for_key('7'), Some(3));
         assert_eq!(grid.pad_index_for_key('r'), Some(4));

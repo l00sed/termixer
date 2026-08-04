@@ -1,7 +1,7 @@
 //! UI module
 
-pub mod colors;
 mod channel;
+pub mod colors;
 mod mixer;
 mod sampler;
 mod widgets;

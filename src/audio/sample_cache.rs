@@ -158,19 +158,18 @@ impl SampleEngine {
         self.per_pad_recording = false;
 
         // Extract all per-pad buffers
-        let pad_buffers: Vec<Vec<f32>> = self.pad_recording_buffers
+        let pad_buffers: Vec<Vec<f32>> = self
+            .pad_recording_buffers
             .iter_mut()
             .filter_map(|slot| {
-                slot.take().and_then(|arc| {
-                    match Arc::try_unwrap(arc) {
-                        Ok(mutex) => {
-                            let buf = mutex.into_inner().unwrap_or_default();
-                            if buf.is_empty() { None } else { Some(buf) }
-                        }
-                        Err(arc) => {
-                            let buf = arc.lock().map(|b| b.clone()).unwrap_or_default();
-                            if buf.is_empty() { None } else { Some(buf) }
-                        }
+                slot.take().and_then(|arc| match Arc::try_unwrap(arc) {
+                    Ok(mutex) => {
+                        let buf = mutex.into_inner().unwrap_or_default();
+                        if buf.is_empty() { None } else { Some(buf) }
+                    }
+                    Err(arc) => {
+                        let buf = arc.lock().map(|b| b.clone()).unwrap_or_default();
+                        if buf.is_empty() { None } else { Some(buf) }
                     }
                 })
             })
@@ -205,9 +204,10 @@ impl SampleEngine {
     #[allow(dead_code)]
     pub fn clear_recording(&mut self) {
         if let Some(ref buf) = self.recording_buffer
-            && let Ok(mut b) = buf.lock() {
-                b.clear();
-            }
+            && let Ok(mut b) = buf.lock()
+        {
+            b.clear();
+        }
     }
 
     pub fn preload(&mut self, path: &Path) -> Result<(), String> {
@@ -254,9 +254,10 @@ impl SampleEngine {
         pad_idx: usize,
     ) -> Result<(), String> {
         if let Some(cfg) = config
-            && cfg.mute {
-                return Ok(());
-            }
+            && cfg.mute
+        {
+            return Ok(());
+        }
 
         self.ensure_device()?;
 
@@ -575,4 +576,3 @@ impl<S: Source<Item = f32>> Source for RecordingSource<S> {
         self.inner.total_duration()
     }
 }
-

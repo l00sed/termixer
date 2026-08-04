@@ -1,7 +1,7 @@
 use std::cell::UnsafeCell;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread;
 
 use symphonia::core::audio::SampleBuffer;
@@ -13,9 +13,15 @@ use symphonia::core::probe::Hint;
 /// Lock-free f64 wrapper for time positions.
 pub struct AtomicF64(AtomicU64);
 impl AtomicF64 {
-    pub fn new(v: f64) -> Self { Self(AtomicU64::new(v.to_bits())) }
-    pub fn store(&self, v: f64) { self.0.store(v.to_bits(), Ordering::Release); }
-    pub fn load(&self) -> f64 { f64::from_bits(self.0.load(Ordering::Acquire)) }
+    pub fn new(v: f64) -> Self {
+        Self(AtomicU64::new(v.to_bits()))
+    }
+    pub fn store(&self, v: f64) {
+        self.0.store(v.to_bits(), Ordering::Release);
+    }
+    pub fn load(&self) -> f64 {
+        f64::from_bits(self.0.load(Ordering::Acquire))
+    }
 }
 unsafe impl Sync for AtomicF64 {}
 
@@ -55,7 +61,9 @@ impl AudioRingBuf {
 
     pub fn write(&self, samples: &[f32]) -> usize {
         let to_write = samples.len().min(self.writable());
-        if to_write == 0 { return 0; }
+        if to_write == 0 {
+            return 0;
+        }
         let w = self.write_pos.load(Ordering::Relaxed) as usize & self.mask;
         let buf = unsafe { &mut *self.buf.get() };
         let cap = buf.len();
@@ -72,7 +80,9 @@ impl AudioRingBuf {
 
     pub fn read(&self, out: &mut [f32]) -> usize {
         let to_read = out.len().min(self.readable());
-        if to_read == 0 { return 0; }
+        if to_read == 0 {
+            return 0;
+        }
         let r = self.read_pos.load(Ordering::Relaxed) as usize & self.mask;
         let buf = unsafe { &*self.buf.get() };
         let cap = buf.len();
@@ -103,6 +113,7 @@ pub struct DecoderThread {
     seek_pos: Arc<AtomicF64>,
     reverse_scrub: Arc<AtomicBool>,
     pub duration_secs: f64,
+    eof: Arc<AtomicBool>,
     _handle: Option<thread::JoinHandle<()>>,
 }
 
@@ -113,6 +124,7 @@ impl DecoderThread {
         let paused = Arc::new(AtomicBool::new(true));
         let seek_pos = Arc::new(AtomicF64::new(-1.0));
         let reverse_scrub = Arc::new(AtomicBool::new(false));
+        let eof = Arc::new(AtomicBool::new(false));
 
         let file = std::fs::File::open(path).map_err(|e| format!("{}", e))?;
         let mss = symphonia::core::io::MediaSourceStream::new(Box::new(file), Default::default());
@@ -126,7 +138,9 @@ impl DecoderThread {
             .map_err(|e| format!("Probe error: {}", e))?;
 
         let mut format = probed.format;
-        let track = format.tracks().iter()
+        let track = format
+            .tracks()
+            .iter()
             .find(|t| t.codec_params.sample_rate.is_some())
             .ok_or_else(|| "No audio track".to_string())?;
 
@@ -148,22 +162,29 @@ impl DecoderThread {
         let seek_inner = Arc::clone(&seek_pos);
         let reverse_inner = Arc::clone(&reverse_scrub);
         let ring_inner = Arc::clone(&ring);
+        let eof_inner = Arc::clone(&eof);
 
         let handle = thread::Builder::new()
             .name("decoder".into())
             .spawn(move || {
                 let mut decode_buf = Vec::with_capacity(8192);
                 loop {
-                    if stop_inner.load(Ordering::Acquire) { break; }
+                    if stop_inner.load(Ordering::Acquire) {
+                        break;
+                    }
 
                     let reverse_now = reverse_inner.load(Ordering::Acquire);
                     let mut did_seek = false;
 
                     let seek = seek_inner.load();
                     if seek >= 0.0 {
+                        let seconds = seek.floor();
                         let seek_to = symphonia::core::formats::SeekTo::Time {
                             track_id: Some(track_id),
-                            time: symphonia::core::units::Time { seconds: seek as u64, frac: 0.0 },
+                            time: symphonia::core::units::Time {
+                                seconds: seconds as u64,
+                                frac: seek - seconds,
+                            },
                         };
                         let _ = format.seek(symphonia::core::formats::SeekMode::Accurate, seek_to);
                         decoder.reset();
@@ -189,14 +210,20 @@ impl DecoderThread {
                     let packet = match format.next_packet() {
                         Ok(p) => p,
                         Err(symphonia::core::errors::Error::IoError(ref e))
-                            if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-                            thread::sleep(std::time::Duration::from_millis(10));
-                            continue;
+                            if e.kind() == std::io::ErrorKind::UnexpectedEof =>
+                        {
+                            eof_inner.store(true, Ordering::Release);
+                            break;
                         }
-                        Err(_) => { break; }
+                        Err(_) => {
+                            eof_inner.store(true, Ordering::Release);
+                            break;
+                        }
                     };
 
-                    if packet.track_id() != track_id { continue; }
+                    if packet.track_id() != track_id {
+                        continue;
+                    }
 
                     let audio_buf = match decoder.decode(&packet) {
                         Ok(d) => d,
@@ -211,7 +238,8 @@ impl DecoderThread {
                     decode_buf.clear();
                     decode_buf.reserve(total_samples);
 
-                    let mut sample_buf = SampleBuffer::<f32>::new(audio_buf.capacity() as u64, spec);
+                    let mut sample_buf =
+                        SampleBuffer::<f32>::new(audio_buf.capacity() as u64, spec);
                     sample_buf.copy_interleaved_ref(audio_buf);
                     decode_buf.extend_from_slice(sample_buf.samples());
 
@@ -224,19 +252,33 @@ impl DecoderThread {
                     while written < decode_buf.len() && !stop_inner.load(Ordering::Acquire) {
                         let n = ring_inner.write(&decode_buf[written..]);
                         written += n;
-                        if n == 0 { thread::yield_now(); }
+                        if n == 0 {
+                            thread::yield_now();
+                        }
                     }
                 }
             })
             .map_err(|e| format!("Thread error: {}", e))?;
 
         Ok(Self {
-            ring, _handle: Some(handle),
-            stop, paused, seek_pos, reverse_scrub, duration_secs,
+            ring,
+            _handle: Some(handle),
+            stop,
+            paused,
+            seek_pos,
+            reverse_scrub,
+            duration_secs,
+            eof,
         })
     }
 
-    pub fn play(&self) { self.paused.store(false, Ordering::Release); }
+    pub fn play(&self) {
+        self.paused.store(false, Ordering::Release);
+    }
+
+    pub fn is_eof(&self) -> bool {
+        self.eof.load(Ordering::Acquire)
+    }
 
     pub fn seek_to(&self, secs: f64) {
         self.seek_pos.store(secs.max(0.0));
@@ -248,7 +290,9 @@ impl DecoderThread {
 }
 
 impl Drop for DecoderThread {
-    fn drop(&mut self) { self.stop.store(true, Ordering::Release); }
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+    }
 }
 
 fn reverse_interleaved_frames(samples: &mut [f32], channels: usize) {

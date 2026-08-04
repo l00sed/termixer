@@ -77,22 +77,18 @@ impl AudioOutput {
     fn map_device_type(cpal_type: cpal::DeviceType, interface: cpal::InterfaceType) -> DeviceType {
         match cpal_type {
             cpal::DeviceType::Headphones | cpal::DeviceType::Headset => DeviceType::Headphones,
-            cpal::DeviceType::Speaker | cpal::DeviceType::Earpiece => {
-                match interface {
-                    cpal::InterfaceType::Bluetooth => DeviceType::Bluetooth,
-                    cpal::InterfaceType::Usb => DeviceType::Usb,
-                    cpal::InterfaceType::Hdmi => DeviceType::Hdmi,
-                    _ => DeviceType::Speakers,
-                }
-            }
-            _ => {
-                match interface {
-                    cpal::InterfaceType::Bluetooth => DeviceType::Bluetooth,
-                    cpal::InterfaceType::Usb => DeviceType::Usb,
-                    cpal::InterfaceType::Hdmi => DeviceType::Hdmi,
-                    _ => DeviceType::Speakers,
-                }
-            }
+            cpal::DeviceType::Speaker | cpal::DeviceType::Earpiece => match interface {
+                cpal::InterfaceType::Bluetooth => DeviceType::Bluetooth,
+                cpal::InterfaceType::Usb => DeviceType::Usb,
+                cpal::InterfaceType::Hdmi => DeviceType::Hdmi,
+                _ => DeviceType::Speakers,
+            },
+            _ => match interface {
+                cpal::InterfaceType::Bluetooth => DeviceType::Bluetooth,
+                cpal::InterfaceType::Usb => DeviceType::Usb,
+                cpal::InterfaceType::Hdmi => DeviceType::Hdmi,
+                _ => DeviceType::Speakers,
+            },
         }
     }
 
@@ -113,13 +109,19 @@ impl AudioOutput {
 
     /// Get the list of display names for the picker UI.
     pub fn devices(&self) -> Vec<String> {
-        self.devices.iter().map(|d| d.display_name.clone()).collect()
+        self.devices
+            .iter()
+            .map(|d| d.display_name.clone())
+            .collect()
     }
 
     /// Get devices filtered by type
     #[allow(dead_code)]
     pub fn devices_by_type(&self, device_type: DeviceType) -> Vec<&AudioDevice> {
-        self.devices.iter().filter(|d| d.device_type == device_type).collect()
+        self.devices
+            .iter()
+            .filter(|d| d.device_type == device_type)
+            .collect()
     }
 
     /// Get the currently selected device display name
@@ -135,7 +137,10 @@ impl AudioOutput {
 
     /// Select a device by display name. Returns the MPV device name if available.
     pub fn select_device(&mut self, display_name: &str) -> Result<Option<String>, String> {
-        let device = self.devices.iter().find(|d| d.display_name == display_name)
+        let device = self
+            .devices
+            .iter()
+            .find(|d| d.display_name == display_name)
             .ok_or_else(|| format!("Device '{}' not found", display_name))?;
         self.selected_device = Some(display_name.to_string());
         self.selected_mpv_name = device.mpv_name.clone();

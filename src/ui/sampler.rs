@@ -7,8 +7,10 @@ use ratatui::{
     widgets::{Block, Borders, Widget},
 };
 
-use crate::state::{PadControl, Sequence, SamplePadGrid, SamplePad, SEQUENCE_STEPS,
-    GlobalSequenceControls, GlobalSequenceControl, EditTarget};
+use crate::state::{
+    EditTarget, GlobalSequenceControl, GlobalSequenceControls, PadControl, SEQUENCE_STEPS,
+    SamplePad, SamplePadGrid, Sequence,
+};
 use crate::ui::colors::*;
 
 /// Configuration pane for a single pad — replaces the pad grid when [c] is pressed
@@ -21,7 +23,12 @@ pub struct PadConfigPane<'a> {
 
 impl<'a> PadConfigPane<'a> {
     pub fn new(grid: &'a SamplePadGrid) -> Self {
-        Self { grid, editing: false, samples_dir: None, sequence_tempo: 1.0 }
+        Self {
+            grid,
+            editing: false,
+            samples_dir: None,
+            sequence_tempo: 1.0,
+        }
     }
 
     pub fn editing(mut self, editing: bool) -> Self {
@@ -50,7 +57,9 @@ impl<'a> Widget for PadConfigPane<'a> {
 
         // Title with pad name
         let title = format!(" CONFIG: [{}] {} ", key_char, pad.name);
-        let title_style = Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD);
+        let title_style = Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD);
 
         let block = Block::default()
             .borders(Borders::ALL)
@@ -61,7 +70,12 @@ impl<'a> Widget for PadConfigPane<'a> {
         block.render(area, buf);
 
         if inner.width < 20 || inner.height < 4 {
-            buf.set_string(inner.x, inner.y, "Too small", Style::default().fg(Color::Red));
+            buf.set_string(
+                inner.x,
+                inner.y,
+                "Too small",
+                Style::default().fg(Color::Red),
+            );
             return;
         }
 
@@ -86,7 +100,16 @@ impl<'a> Widget for PadConfigPane<'a> {
             let is_selected = control == selected_ctrl;
             let row_area = Rect::new(inner.x, y, inner.width, row_height);
 
-            render_config_row(row_area, buf, control, pad, is_selected, is_editing, self.samples_dir, self.sequence_tempo);
+            render_config_row(
+                row_area,
+                buf,
+                control,
+                pad,
+                is_selected,
+                is_editing,
+                self.samples_dir,
+                self.sequence_tempo,
+            );
 
             // Add separator after Sample row
             if control == PadControl::Sample {
@@ -144,7 +167,9 @@ fn render_config_row(
 
     // Label
     let label_style = if selected {
-        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD)
     } else if control == PadControl::FiltersHeader {
         Style::default().fg(TEXT_GHOST)
     } else {
@@ -160,10 +185,7 @@ fn render_config_row(
             let has_sample = pad.sample_path.is_some();
             let sample_name = pad.sample_path.as_ref().map(|p| {
                 if let Some(dir) = samples_dir {
-                    p.strip_prefix(dir)
-                        .unwrap_or(p)
-                        .display()
-                        .to_string()
+                    p.strip_prefix(dir).unwrap_or(p).display().to_string()
                 } else {
                     p.display().to_string()
                 }
@@ -178,9 +200,13 @@ fn render_config_row(
                 "(click to set)".to_string()
             };
             let style = if selected && has_sample {
-                Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD)
             } else if selected {
-                Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::BOLD)
             } else if has_sample {
                 Style::default().fg(Color::White)
             } else {
@@ -205,7 +231,9 @@ fn render_config_row(
         _ => {
             // Continuous controls: draw a bar + value
             let (value, display) = match control {
-                PadControl::Volume => (pad.config.volume / 2.0, format!("{:.2}", pad.config.volume)),
+                PadControl::Volume => {
+                    (pad.config.volume / 2.0, format!("{:.2}", pad.config.volume))
+                }
                 PadControl::BpmMultiplier => {
                     let norm = (sequence_tempo - 0.25) / 3.75; // 0.25..4.0 → 0..1
                     (norm, format!("{:.2}x", sequence_tempo))
@@ -220,10 +248,16 @@ fn render_config_row(
                 }
                 PadControl::EqLow => (pad.config.eq_low / 2.0, format!("{:.1}", pad.config.eq_low)),
                 PadControl::EqMid => (pad.config.eq_mid / 2.0, format!("{:.1}", pad.config.eq_mid)),
-                PadControl::EqHigh => (pad.config.eq_high / 2.0, format!("{:.1}", pad.config.eq_high)),
+                PadControl::EqHigh => (
+                    pad.config.eq_high / 2.0,
+                    format!("{:.1}", pad.config.eq_high),
+                ),
                 PadControl::Reverb => (pad.config.reverb, format!("{:.2}", pad.config.reverb)),
                 PadControl::Chorus => (pad.config.chorus, format!("{:.2}", pad.config.chorus)),
-                PadControl::Distortion => (pad.config.distortion, format!("{:.2}", pad.config.distortion)),
+                PadControl::Distortion => (
+                    pad.config.distortion,
+                    format!("{:.2}", pad.config.distortion),
+                ),
                 _ => return,
             };
 
@@ -250,7 +284,9 @@ fn render_config_row(
             // Value text
             let val_x = bar_x + bar_chars as u16 + 1;
             let val_style = if selected && editing {
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
             } else if selected {
                 Style::default().fg(Color::White)
             } else {
@@ -322,9 +358,25 @@ impl<'a> Widget for SequenceTopBar<'a> {
         let pp_is_target = self.selected && self.selected_control == GlobalSequenceControl::Mute;
         let pp_active = pp_is_target && self.editing;
         let (mute_icon, mute_fg) = if self.global.mute {
-            ("\u{F03E4}", if pp_active || pp_is_target { Color::Red } else { Color::DarkGray })
+            (
+                "\u{F03E4}",
+                if pp_active || pp_is_target {
+                    Color::Red
+                } else {
+                    Color::DarkGray
+                },
+            )
         } else {
-            ("\u{25B6}", if pp_active { TEXT_EDITING } else if pp_is_target { TEXT_BRIGHT } else { TEXT_DIM })
+            (
+                "\u{25B6}",
+                if pp_active {
+                    TEXT_EDITING
+                } else if pp_is_target {
+                    TEXT_BRIGHT
+                } else {
+                    TEXT_DIM
+                },
+            )
         };
         let mute_style = if pp_is_target {
             Style::default().fg(mute_fg).add_modifier(Modifier::BOLD)
@@ -342,7 +394,11 @@ impl<'a> Widget for SequenceTopBar<'a> {
         // --- Load button (8 cells: " 📂 LOAD ") ---
         let load_x = sep_pp - 8;
         let load_is_target = self.selected && self.selected_control == GlobalSequenceControl::Load;
-        let load_fg = if load_is_target { TEXT_BRIGHT } else { TEXT_DIM };
+        let load_fg = if load_is_target {
+            TEXT_BRIGHT
+        } else {
+            TEXT_DIM
+        };
         let load_style = if load_is_target {
             Style::default().fg(load_fg).add_modifier(Modifier::BOLD)
         } else {
@@ -359,7 +415,11 @@ impl<'a> Widget for SequenceTopBar<'a> {
         // --- Save button (8 cells: " 💾 SAVE ") ---
         let save_x = sep_ls - 8;
         let save_is_target = self.selected && self.selected_control == GlobalSequenceControl::Save;
-        let save_fg = if save_is_target { TEXT_BRIGHT } else { TEXT_DIM };
+        let save_fg = if save_is_target {
+            TEXT_BRIGHT
+        } else {
+            TEXT_DIM
+        };
         let save_style = if save_is_target {
             Style::default().fg(save_fg).add_modifier(Modifier::BOLD)
         } else {
@@ -377,7 +437,13 @@ impl<'a> Widget for SequenceTopBar<'a> {
         let bpm_str = format!("{:.0}", self.global.bpm);
         let bpm_is_target = self.selected && self.selected_control == GlobalSequenceControl::Bpm;
         let bpm_active = bpm_is_target && self.editing;
-        let bpm_fg = if bpm_active { TEXT_EDITING } else if bpm_is_target { TEXT_BRIGHT } else { TEXT_DIM };
+        let bpm_fg = if bpm_active {
+            TEXT_EDITING
+        } else if bpm_is_target {
+            TEXT_BRIGHT
+        } else {
+            TEXT_DIM
+        };
         let bpm_style = if bpm_is_target {
             Style::default().fg(bpm_fg).add_modifier(Modifier::BOLD)
         } else {
@@ -395,11 +461,21 @@ impl<'a> Widget for SequenceTopBar<'a> {
         // --- Volume slider (fills remaining space) ---
         let slider_x = area.x + 1;
         let slider_end = sep1_x - 1;
-        let slider_w = if slider_end > slider_x { slider_end - slider_x } else { 5 };
+        let slider_w = if slider_end > slider_x {
+            slider_end - slider_x
+        } else {
+            5
+        };
         let vol_is_target = self.selected && self.selected_control == GlobalSequenceControl::Volume;
         let vol_active = vol_is_target && self.editing;
         let filled = (self.global.volume * slider_w as f32) as usize;
-        let vol_fg = if vol_active { TEXT_EDITING } else if vol_is_target { TEXT_BRIGHT } else { TEXT_DIM };
+        let vol_fg = if vol_active {
+            TEXT_EDITING
+        } else if vol_is_target {
+            TEXT_BRIGHT
+        } else {
+            TEXT_DIM
+        };
         let bar_style = if vol_is_target {
             Style::default().fg(vol_fg).add_modifier(Modifier::BOLD)
         } else {
@@ -491,7 +567,9 @@ impl<'a> Widget for SequenceRow<'a> {
         // Name (left-aligned, padded: " X ")
         let name = format!(" {} ", self.sequence.name);
         let name_style = if self.selected {
-            Style::default().fg(TEXT_BRIGHT).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(TEXT_BRIGHT)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(TEXT_DIM)
         };
@@ -505,7 +583,9 @@ impl<'a> Widget for SequenceRow<'a> {
         // --- Right-aligned controls: mute + gear ---
         let gear_is_target = self.selected && self.cursor == EditTarget::Gear;
         let gear_style = if gear_is_target {
-            Style::default().fg(TEXT_BRIGHT).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(TEXT_BRIGHT)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(TEXT_DIM)
         };
@@ -514,7 +594,14 @@ impl<'a> Widget for SequenceRow<'a> {
         let (mute_label, mute_color) = if self.sequence.mute {
             ("\u{F0581}", Color::Red)
         } else {
-            ("\u{F057E}", if mute_is_target { TEXT_BRIGHT } else { TEXT_DIM })
+            (
+                "\u{F057E}",
+                if mute_is_target {
+                    TEXT_BRIGHT
+                } else {
+                    TEXT_DIM
+                },
+            )
         };
         let mute_style = if mute_is_target {
             Style::default().fg(mute_color).add_modifier(Modifier::BOLD)
@@ -556,15 +643,28 @@ impl<'a> SequenceRow<'a> {
         let step_active = is_target && self.editing;
 
         let (ch, style) = if is_playing && is_marked {
-            ("󱔀", Style::default().fg(STATUS_PLAYING).add_modifier(Modifier::BOLD))
+            (
+                "󱔀",
+                Style::default()
+                    .fg(STATUS_PLAYING)
+                    .add_modifier(Modifier::BOLD),
+            )
         } else if is_playing && !is_marked {
             ("󰝣", Style::default().fg(TEXT_DIM))
         } else if step_active {
-            (if is_marked { "󱔀" } else { "󰝣" },
-             Style::default().fg(TEXT_EDITING).add_modifier(Modifier::BOLD))
+            (
+                if is_marked { "󱔀" } else { "󰝣" },
+                Style::default()
+                    .fg(TEXT_EDITING)
+                    .add_modifier(Modifier::BOLD),
+            )
         } else if is_target {
-            (if is_marked { "󱔀" } else { "󰝣" },
-             Style::default().fg(TEXT_BRIGHT).add_modifier(Modifier::BOLD))
+            (
+                if is_marked { "󱔀" } else { "󰝣" },
+                Style::default()
+                    .fg(TEXT_BRIGHT)
+                    .add_modifier(Modifier::BOLD),
+            )
         } else if is_marked {
             ("󱔀", Style::default().fg(TEXT_DEFAULT))
         } else {

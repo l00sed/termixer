@@ -8,10 +8,10 @@
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use crate::audio::bpm::pitch_class_to_camelot;
 
@@ -55,7 +55,12 @@ impl AtomicMeter {
             if new_bits <= current {
                 return;
             }
-            match atom.compare_exchange_weak(current, new_bits, Ordering::Relaxed, Ordering::Relaxed) {
+            match atom.compare_exchange_weak(
+                current,
+                new_bits,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
                 Ok(_) => break,
                 Err(actual) => current = actual,
             }
@@ -145,8 +150,12 @@ impl MpvClient {
 
         match UnixStream::connect(path) {
             Ok(stream) => {
-                stream.set_read_timeout(Some(Duration::from_millis(100))).ok();
-                stream.set_write_timeout(Some(Duration::from_millis(100))).ok();
+                stream
+                    .set_read_timeout(Some(Duration::from_millis(100)))
+                    .ok();
+                stream
+                    .set_write_timeout(Some(Duration::from_millis(100)))
+                    .ok();
                 self.reader = Some(BufReader::new(stream));
                 Ok(())
             }
@@ -156,8 +165,12 @@ impl MpvClient {
 
     pub fn set_timeouts(&mut self, read_ms: u64, write_ms: u64) {
         if let Some(reader) = self.reader.as_mut() {
-            let _ = reader.get_mut().set_read_timeout(Some(Duration::from_millis(read_ms)));
-            let _ = reader.get_mut().set_write_timeout(Some(Duration::from_millis(write_ms)));
+            let _ = reader
+                .get_mut()
+                .set_read_timeout(Some(Duration::from_millis(read_ms)));
+            let _ = reader
+                .get_mut()
+                .set_write_timeout(Some(Duration::from_millis(write_ms)));
         }
     }
 
@@ -179,12 +192,20 @@ impl MpvClient {
         let stream = match UnixStream::connect(Path::new(socket_path)) {
             Ok(s) => s,
             Err(e) => {
-                tracing::warn!("Metering thread: failed to connect to {}: {}", socket_path, e);
+                tracing::warn!(
+                    "Metering thread: failed to connect to {}: {}",
+                    socket_path,
+                    e
+                );
                 return;
             }
         };
-        stream.set_read_timeout(Some(Duration::from_millis(50))).ok();
-        stream.set_write_timeout(Some(Duration::from_millis(50))).ok();
+        stream
+            .set_read_timeout(Some(Duration::from_millis(50)))
+            .ok();
+        stream
+            .set_write_timeout(Some(Duration::from_millis(50)))
+            .ok();
         let mut reader = BufReader::new(stream);
         let mut req_id: u64 = 0;
         let mut line = String::new();
@@ -216,81 +237,96 @@ impl MpvClient {
                     Ok(0) => break,
                     Ok(_) => {
                         if let Ok(resp) = serde_json::from_str::<serde_json::Value>(&line)
-                            && resp.get("request_id").and_then(|v| v.as_u64()) == Some(req_id) {
-                                if let Some(data) = resp.get("data")
-                                    && let Some(obj) = data.as_object() {
-                                        let get_dbfs = |key: &str| -> f32 {
-                                            obj.get(key)
-                                                .and_then(|v| v.as_str())
-                                                .and_then(|s| s.parse::<f32>().ok())
-                                                .unwrap_or(f32::NEG_INFINITY)
-                                        };
+                            && resp.get("request_id").and_then(|v| v.as_u64()) == Some(req_id)
+                        {
+                            if let Some(data) = resp.get("data")
+                                && let Some(obj) = data.as_object()
+                            {
+                                let get_dbfs = |key: &str| -> f32 {
+                                    obj.get(key)
+                                        .and_then(|v| v.as_str())
+                                        .and_then(|s| s.parse::<f32>().ok())
+                                        .unwrap_or(f32::NEG_INFINITY)
+                                };
 
-                                        let peak_l_db = get_dbfs("lavfi.astats.1.Peak_level");
-                                        let peak_r_db = get_dbfs("lavfi.astats.2.Peak_level");
-                                        let rms_l_db = get_dbfs("lavfi.astats.1.RMS_level");
-                                        let rms_r_db = get_dbfs("lavfi.astats.2.RMS_level");
+                                let peak_l_db = get_dbfs("lavfi.astats.1.Peak_level");
+                                let peak_r_db = get_dbfs("lavfi.astats.2.Peak_level");
+                                let rms_l_db = get_dbfs("lavfi.astats.1.RMS_level");
+                                let rms_r_db = get_dbfs("lavfi.astats.2.RMS_level");
 
-                                        let dbfs_to_linear = |db: f32| -> f32 {
-                                            if db <= f32::NEG_INFINITY {
-                                                0.0
-                                            } else {
-                                                (10.0_f32).powf(db / 20.0).clamp(0.0, 1.0)
-                                            }
-                                        };
+                                let dbfs_to_linear = |db: f32| -> f32 {
+                                    if db <= f32::NEG_INFINITY {
+                                        0.0
+                                    } else {
+                                        (10.0_f32).powf(db / 20.0).clamp(0.0, 1.0)
+                                    }
+                                };
 
-                                        let r_l = dbfs_to_linear(rms_l_db);
-                                        let r_r = dbfs_to_linear(rms_r_db);
-                                        meters.store(
-                                            dbfs_to_linear(peak_l_db),
-                                            dbfs_to_linear(peak_r_db),
-                                            r_l,
-                                            r_r,
-                                        );
+                                let r_l = dbfs_to_linear(rms_l_db);
+                                let r_r = dbfs_to_linear(rms_r_db);
+                                meters.store(
+                                    dbfs_to_linear(peak_l_db),
+                                    dbfs_to_linear(peak_r_db),
+                                    r_l,
+                                    r_r,
+                                );
 
-                                        // Onset detection: energy from RMS
-                                        let energy = (r_l + r_r) * 0.5;
-                                        energy_ring.push(energy);
-                                        if energy_ring.len() > 100 {
-                                            energy_ring.remove(0);
+                                // Onset detection: energy from RMS
+                                let energy = (r_l + r_r) * 0.5;
+                                energy_ring.push(energy);
+                                if energy_ring.len() > 100 {
+                                    energy_ring.remove(0);
+                                }
+
+                                if energy_ring.len() >= 20 {
+                                    let mean: f32 =
+                                        energy_ring.iter().sum::<f32>() / energy_ring.len() as f32;
+                                    let var: f32 =
+                                        energy_ring.iter().map(|e| (e - mean).powi(2)).sum::<f32>()
+                                            / energy_ring.len() as f32;
+                                    let threshold = mean + 1.2 * var.sqrt();
+
+                                    let now = Instant::now();
+                                    let ms_since =
+                                        now.duration_since(last_onset).as_millis() as f32;
+
+                                    if energy > threshold
+                                        && energy > mean * 1.05
+                                        && ms_since >= 250.0
+                                    {
+                                        onset_times.push(now);
+                                        last_onset = now;
+                                        if onset_times.len() > 32 {
+                                            onset_times.remove(0);
                                         }
 
-                                        if energy_ring.len() >= 20 {
-                                            let mean: f32 = energy_ring.iter().sum::<f32>() / energy_ring.len() as f32;
-                                            let var: f32 = energy_ring.iter().map(|e| (e - mean).powi(2)).sum::<f32>() / energy_ring.len() as f32;
-                                            let threshold = mean + 1.2 * var.sqrt();
-
-                                            let now = Instant::now();
-                                            let ms_since = now.duration_since(last_onset).as_millis() as f32;
-
-                                            if energy > threshold && energy > mean * 1.05 && ms_since >= 250.0 {
-                                                onset_times.push(now);
-                                                last_onset = now;
-                                                if onset_times.len() > 32 {
-                                                    onset_times.remove(0);
-                                                }
-
-                                                // BPM from median IOI (≥3 onsets)
-                                                if onset_times.len() >= 3 {
-                                                    let mut iois: Vec<f32> = onset_times.windows(2)
-                                                        .map(|w| w[1].duration_since(w[0]).as_millis() as f32)
-                                                        .filter(|ioi| *ioi >= 250.0 && *ioi <= 1000.0)
-                                                        .collect();
-                                                    if iois.len() >= 2 {
-                                                        iois.sort_by(|a, b| a.partial_cmp(b).unwrap());
-                                                        let median = iois[iois.len() / 2];
-                                                        let bpm = (60000.0 / median * 100.0) as u32;
-                                                        if (6000..=20000).contains(&bpm) { // 60.00–200.00 BPM
-                                                            meters.detected_bpm.store(bpm, Ordering::Relaxed);
-                                                        }
-                                                    }
+                                        // BPM from median IOI (≥3 onsets)
+                                        if onset_times.len() >= 3 {
+                                            let mut iois: Vec<f32> = onset_times
+                                                .windows(2)
+                                                .map(|w| {
+                                                    w[1].duration_since(w[0]).as_millis() as f32
+                                                })
+                                                .filter(|ioi| *ioi >= 250.0 && *ioi <= 1000.0)
+                                                .collect();
+                                            if iois.len() >= 2 {
+                                                iois.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                                                let median = iois[iois.len() / 2];
+                                                let bpm = (60000.0 / median * 100.0) as u32;
+                                                if (6000..=20000).contains(&bpm) {
+                                                    // 60.00–200.00 BPM
+                                                    meters
+                                                        .detected_bpm
+                                                        .store(bpm, Ordering::Relaxed);
                                                 }
                                             }
                                         }
                                     }
-                                got_response = true;
-                                break;
+                                }
                             }
+                            got_response = true;
+                            break;
+                        }
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
                     Err(_) => break,
@@ -306,7 +342,10 @@ impl MpvClient {
         }
     }
 
-    pub fn send_command(&mut self, command: Vec<serde_json::Value>) -> Result<Option<serde_json::Value>, String> {
+    pub fn send_command(
+        &mut self,
+        command: Vec<serde_json::Value>,
+    ) -> Result<Option<serde_json::Value>, String> {
         let reader = self.reader.as_mut().ok_or("Not connected")?;
 
         self.request_id += 1;
@@ -318,9 +357,13 @@ impl MpvClient {
         let mut cmd_str = cmd.to_string();
         cmd_str.push('\n');
 
-        reader.get_mut().write_all(cmd_str.as_bytes())
+        reader
+            .get_mut()
+            .write_all(cmd_str.as_bytes())
             .map_err(|e| format!("Write failed: {}", e))?;
-        reader.get_mut().flush()
+        reader
+            .get_mut()
+            .flush()
             .map_err(|e| format!("Flush failed: {}", e))?;
 
         let mut line = String::new();
@@ -331,13 +374,17 @@ impl MpvClient {
                 Ok(0) => return Err("Connection closed".to_string()),
                 Ok(_) => {
                     if let Ok(resp) = serde_json::from_str::<serde_json::Value>(&line)
-                        && resp.get("request_id").and_then(|v| v.as_u64()) == Some(self.request_id) {
-                            let error = resp.get("error").and_then(|v| v.as_str()).unwrap_or("success");
-                            if error != "success" {
-                                return Err(format!("MPV error: {}", error));
-                            }
-                            return Ok(resp.get("data").cloned());
+                        && resp.get("request_id").and_then(|v| v.as_u64()) == Some(self.request_id)
+                    {
+                        let error = resp
+                            .get("error")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("success");
+                        if error != "success" {
+                            return Err(format!("MPV error: {}", error));
                         }
+                        return Ok(resp.get("data").cloned());
+                    }
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                     break;
@@ -350,19 +397,12 @@ impl MpvClient {
     }
 
     pub fn set_property(&mut self, property: &str, value: serde_json::Value) -> Result<(), String> {
-        self.send_command(vec![
-            "set_property".into(),
-            property.into(),
-            value,
-        ])?;
+        self.send_command(vec!["set_property".into(), property.into(), value])?;
         Ok(())
     }
 
     pub fn get_property(&mut self, property: &str) -> Result<serde_json::Value, String> {
-        let result = self.send_command(vec![
-            "get_property".into(),
-            property.into(),
-        ])?;
+        let result = self.send_command(vec!["get_property".into(), property.into()])?;
         result.ok_or_else(|| "No data returned".to_string())
     }
 
@@ -376,7 +416,9 @@ impl MpvClient {
 
     pub fn get_volume(&mut self) -> Result<f32, String> {
         let val = self.get_property("volume")?;
-        val.as_f64().map(|v| v as f32).ok_or("Invalid volume value".to_string())
+        val.as_f64()
+            .map(|v| v as f32)
+            .ok_or("Invalid volume value".to_string())
     }
 
     pub fn get_pause(&mut self) -> Result<bool, String> {
@@ -392,7 +434,7 @@ impl MpvClient {
         self.set_property("speed", serde_json::json!(speed))
     }
 
-    /// Get current playback position in seconds.
+    /// Get MPV's displayed position in the current file.
     pub fn get_time_pos(&mut self) -> Result<f32, String> {
         self.get_property("time-pos")
             .ok()
@@ -449,14 +491,23 @@ impl MpvClient {
             entries
                 .iter()
                 .position(|item| {
-                    item.get("current").and_then(|v| v.as_bool()).unwrap_or(false)
-                        || item.get("playing").and_then(|v| v.as_bool()).unwrap_or(false)
+                    item.get("current")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false)
+                        || item
+                            .get("playing")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false)
                 })
                 .map(|idx| idx as i64)
         });
 
         let pos = pos_from_playlist
-            .or_else(|| self.get_property("playlist-pos").ok().and_then(|v| to_i64(&v)))
+            .or_else(|| {
+                self.get_property("playlist-pos")
+                    .ok()
+                    .and_then(|v| to_i64(&v))
+            })
             .or_else(|| {
                 self.get_property("playlist-pos-1")
                     .ok()
@@ -467,7 +518,11 @@ impl MpvClient {
         let count = playlist
             .as_ref()
             .map(|a| a.len() as i64)
-            .or_else(|| self.get_property("playlist-count").ok().and_then(|v| to_i64(&v)))
+            .or_else(|| {
+                self.get_property("playlist-count")
+                    .ok()
+                    .and_then(|v| to_i64(&v))
+            })
             .unwrap_or(0);
 
         if count <= 0 {
@@ -479,11 +534,30 @@ impl MpvClient {
         Ok((has_prev, has_next))
     }
 
+    pub fn playlist_next(&mut self) -> Result<(), String> {
+        self.send_command(vec![
+            serde_json::Value::String("playlist-next".to_string()),
+            serde_json::Value::String("weak".to_string()),
+        ])?;
+        Ok(())
+    }
+
+    pub fn playlist_prev(&mut self) -> Result<(), String> {
+        self.send_command(vec![
+            serde_json::Value::String("playlist-prev".to_string()),
+            serde_json::Value::String("weak".to_string()),
+        ])?;
+        Ok(())
+    }
+
     fn has_filter(&mut self, label: &str) -> bool {
         if let Ok(af) = self.get_property("af")
-            && let Some(arr) = af.as_array() {
-                return arr.iter().any(|f| f.get("label").and_then(|v| v.as_str()) == Some(label));
-            }
+            && let Some(arr) = af.as_array()
+        {
+            return arr
+                .iter()
+                .any(|f| f.get("label").and_then(|v| v.as_str()) == Some(label));
+        }
         false
     }
 
@@ -531,8 +605,12 @@ impl MpvClient {
                 self.af_command("lpf", "frequency", "20000").ok();
             }
         } else if self.has_filter("lpf") {
-            if self.af_command("lpf", "frequency", &format!("{:.0}", freq)).is_err() {
-                self.send_command(vec!["af".into(), "remove".into(), "@lpf".into()]).ok();
+            if self
+                .af_command("lpf", "frequency", &format!("{:.0}", freq))
+                .is_err()
+            {
+                self.send_command(vec!["af".into(), "remove".into(), "@lpf".into()])
+                    .ok();
                 let filter = format!("@lpf:lavfi=[lowpass=f={:.0}:width_type=q:width=0.5]", freq);
                 self.send_command(vec!["af".into(), "add".into(), filter.into()])?;
             }
@@ -549,8 +627,12 @@ impl MpvClient {
                 self.af_command("hpf", "frequency", "20").ok();
             }
         } else if self.has_filter("hpf") {
-            if self.af_command("hpf", "frequency", &format!("{:.0}", freq)).is_err() {
-                self.send_command(vec!["af".into(), "remove".into(), "@hpf".into()]).ok();
+            if self
+                .af_command("hpf", "frequency", &format!("{:.0}", freq))
+                .is_err()
+            {
+                self.send_command(vec!["af".into(), "remove".into(), "@hpf".into()])
+                    .ok();
                 let filter = format!("@hpf:lavfi=[highpass=f={:.0}:width_type=q:width=0.5]", freq);
                 self.send_command(vec!["af".into(), "add".into(), filter.into()])?;
             }
@@ -637,7 +719,8 @@ impl MpvClient {
 
     pub fn set_eq(&mut self, low: f32, mid: f32, high: f32) -> Result<(), String> {
         if self.has_filter("eq") {
-            self.send_command(vec!["af".into(), "remove".into(), "@eq".into()]).ok();
+            self.send_command(vec!["af".into(), "remove".into(), "@eq".into()])
+                .ok();
         }
 
         let mut filters = Vec::new();
@@ -658,7 +741,10 @@ impl MpvClient {
             let normalized = mid.abs() / 24.0;
             let mid_freq: f32 = 200.0 * (8000.0f32 / 200.0).powf(normalized);
             let mid_gain: f32 = (mid / 2.0).clamp(-12.0, 12.0);
-            filters.push(format!("equalizer=f={:.0}:t=h:w=500:g={:.1}", mid_freq, mid_gain));
+            filters.push(format!(
+                "equalizer=f={:.0}:t=h:w=500:g={:.1}",
+                mid_freq, mid_gain
+            ));
         }
 
         if high < 0.0 {
@@ -683,10 +769,13 @@ impl MpvClient {
     /// Set 10-band master EQ (frequencies: 32, 64, 125, 250, 500, 1k, 2k, 4k, 8k, 16k Hz)
     pub fn set_master_eq(&mut self, bands: &[f32; 10], freqs: &[f32; 10]) -> Result<(), String> {
         if self.has_filter("meq") {
-            self.send_command(vec!["af".into(), "remove".into(), "@meq".into()]).ok();
+            self.send_command(vec!["af".into(), "remove".into(), "@meq".into()])
+                .ok();
         }
 
-        let filters: Vec<String> = bands.iter().zip(freqs.iter())
+        let filters: Vec<String> = bands
+            .iter()
+            .zip(freqs.iter())
             .filter(|(g, _)| g.abs() > 0.1)
             .map(|(g, f)| {
                 // Width = half the center frequency for musical Q
@@ -708,12 +797,14 @@ impl MpvClient {
 
         if pan_clamped.abs() < 0.01 {
             if self.has_filter("pan") {
-                self.send_command(vec!["af".into(), "remove".into(), "@pan".into()]).ok();
+                self.send_command(vec!["af".into(), "remove".into(), "@pan".into()])
+                    .ok();
             }
         } else {
             let filter = format!("@pan:lavfi=[stereotools=balance_out={:.2}]", pan_clamped);
             if self.has_filter("pan") {
-                self.send_command(vec!["af".into(), "remove".into(), "@pan".into()]).ok();
+                self.send_command(vec!["af".into(), "remove".into(), "@pan".into()])
+                    .ok();
             }
             self.send_command(vec!["af".into(), "add".into(), filter.into()])?;
         }
@@ -722,19 +813,22 @@ impl MpvClient {
 
     pub fn get_path(&mut self) -> Result<String, String> {
         let val = self.get_property("path")?;
-        val.as_str().map(|s| s.to_string()).ok_or("Invalid path value".to_string())
+        val.as_str()
+            .map(|s| s.to_string())
+            .ok_or("Invalid path value".to_string())
     }
 
     /// Best-effort display title for the currently loaded media.
     /// Prefers `media-title`, then metadata TITLE fields.
     pub fn get_media_title(&mut self) -> Option<String> {
         if let Ok(val) = self.get_property("media-title")
-            && let Some(s) = val.as_str() {
-                let t = s.trim();
-                if !t.is_empty() {
-                    return Some(t.to_string());
-                }
+            && let Some(s) = val.as_str()
+        {
+            let t = s.trim();
+            if !t.is_empty() {
+                return Some(t.to_string());
             }
+        }
 
         let metadata = self.get_property("metadata").ok()?;
         let obj = metadata.as_object()?;
@@ -794,8 +888,12 @@ impl MpvClient {
                     None
                 };
                 if let Some(mut bpm) = num {
-                    while bpm > 400.0 { bpm *= 0.5; }
-                    while bpm > 0.0 && bpm < 40.0 { bpm *= 2.0; }
+                    while bpm > 400.0 {
+                        bpm *= 0.5;
+                    }
+                    while bpm > 0.0 && bpm < 40.0 {
+                        bpm *= 2.0;
+                    }
                     if (10.0..=400.0).contains(&bpm) {
                         tracing::debug!("Found BPM from metadata tag '{}': {}", tag, bpm);
                         return Some(bpm);
@@ -833,18 +931,21 @@ impl MpvClient {
     /// Get MPV's current audio output device (CoreAudio UID string).
     pub fn get_audio_device(&mut self) -> Result<String, String> {
         let val = self.get_property("audio-device")?;
-        val.as_str().map(|s| s.to_string()).ok_or("Invalid audio-device value".to_string())
+        val.as_str()
+            .map(|s| s.to_string())
+            .ok_or("Invalid audio-device value".to_string())
     }
 
     pub fn ensure_astats(&mut self) -> Result<(), String> {
         if let Ok(af) = self.get_property("af")
-            && let Some(arr) = af.as_array() {
-                for filter in arr {
-                    if filter.get("label").and_then(|v| v.as_str()) == Some("astats") {
-                        return Ok(());
-                    }
+            && let Some(arr) = af.as_array()
+        {
+            for filter in arr {
+                if filter.get("label").and_then(|v| v.as_str()) == Some("astats") {
+                    return Ok(());
                 }
             }
+        }
 
         self.send_command(vec![
             "af".into(),
@@ -878,13 +979,18 @@ impl MpvClient {
         let _ = self.set_pan(0.0);
         // Remove all audio filters (eq, astats, pan, lpf, hpf)
         if let Ok(af) = self.get_property("af")
-            && let Some(arr) = af.as_array() {
-                for filter in arr {
-                    if let Some(label) = filter.get("label").and_then(|v| v.as_str()) {
-                        let _ = self.send_command(vec!["af".into(), "remove".into(), format!("@{}", label).into()]);
-                    }
+            && let Some(arr) = af.as_array()
+        {
+            for filter in arr {
+                if let Some(label) = filter.get("label").and_then(|v| v.as_str()) {
+                    let _ = self.send_command(vec![
+                        "af".into(),
+                        "remove".into(),
+                        format!("@{}", label).into(),
+                    ]);
                 }
             }
+        }
     }
 }
 

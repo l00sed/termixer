@@ -38,11 +38,22 @@ pub struct DeckState {
 impl Default for DeckState {
     fn default() -> Self {
         Self {
-            volume: 0.8, playback_rate: 1.0, playing: true, filter_cutoff: 0.0, filter_freq: 0.5,
-            lfo_speed: 0.0, lfo_shape: 0.5,
-            eq_low: 0.0, eq_mid: 0.0, eq_high: 0.0,
-            eq_low_kill: false, eq_mid_kill: false, eq_high_kill: false,
-            pan: 0.0, muted: false, solo: false,
+            volume: 0.8,
+            playback_rate: 1.0,
+            playing: true,
+            filter_cutoff: 0.0,
+            filter_freq: 0.5,
+            lfo_speed: 0.0,
+            lfo_shape: 0.5,
+            eq_low: 0.0,
+            eq_mid: 0.0,
+            eq_high: 0.0,
+            eq_low_kill: false,
+            eq_mid_kill: false,
+            eq_high_kill: false,
+            pan: 0.0,
+            muted: false,
+            solo: false,
         }
     }
 }
@@ -54,6 +65,21 @@ pub struct MasterState {
     pub crossfader: f32,
     pub solo_active: bool,
     pub master_eq: [f32; 10],
+}
+
+#[derive(Clone)]
+pub struct MicState {
+    pub gain: f32,
+    pub muted: bool,
+}
+
+impl Default for MicState {
+    fn default() -> Self {
+        Self {
+            gain: 1.0,
+            muted: true,
+        }
+    }
 }
 
 impl Default for MasterState {
@@ -106,6 +132,7 @@ impl Default for SequenceSnapshot {
 pub struct ControlSnapshot {
     pub decks: [DeckState; 3],
     pub master: MasterState,
+    pub mic: MicState,
     pub sequences: Vec<SequenceSnapshot>,
 }
 
@@ -132,7 +159,10 @@ impl ControlState {
         let initial = ControlSnapshot::default();
         let (input, output) = triple_buffer::triple_buffer(&initial);
         let state = Self {
-            ui: Mutex::new(UiSide { canonical: initial, input }),
+            ui: Mutex::new(UiSide {
+                canonical: initial,
+                input,
+            }),
         };
         (state, output)
     }
@@ -150,41 +180,75 @@ impl ControlState {
     /// Read the current UI-side canonical state (UI thread convenience).
     #[allow(dead_code)]
     pub fn read(&self) -> ControlSnapshot {
-        self.ui.lock().map(|u| u.canonical.clone()).unwrap_or_default()
+        self.ui
+            .lock()
+            .map(|u| u.canonical.clone())
+            .unwrap_or_default()
     }
 
     // --- UI thread write helpers ---
 
     pub fn set_volume(&self, ch: usize, v: f32) {
         let clamped = v.clamp(0.0, 1.5);
-        self.mutate(|s| { if let Some(d) = s.decks.get_mut(ch) { d.volume = clamped; } });
+        self.mutate(|s| {
+            if let Some(d) = s.decks.get_mut(ch) {
+                d.volume = clamped;
+            }
+        });
     }
     pub fn set_playback_rate(&self, ch: usize, rate: f32) {
         let clamped = rate.clamp(0.1, 4.0);
-        self.mutate(|s| { if let Some(d) = s.decks.get_mut(ch) { d.playback_rate = clamped; } });
+        self.mutate(|s| {
+            if let Some(d) = s.decks.get_mut(ch) {
+                d.playback_rate = clamped;
+            }
+        });
     }
     pub fn set_muted(&self, ch: usize, m: bool) {
-        self.mutate(|s| { if let Some(d) = s.decks.get_mut(ch) { d.muted = m; } });
+        self.mutate(|s| {
+            if let Some(d) = s.decks.get_mut(ch) {
+                d.muted = m;
+            }
+        });
     }
     pub fn set_playing(&self, ch: usize, p: bool) {
-        self.mutate(|s| { if let Some(d) = s.decks.get_mut(ch) { d.playing = p; } });
+        self.mutate(|s| {
+            if let Some(d) = s.decks.get_mut(ch) {
+                d.playing = p;
+            }
+        });
     }
     pub fn set_solo(&self, ch: usize, s_on: bool) {
-        self.mutate(|s| { if let Some(d) = s.decks.get_mut(ch) { d.solo = s_on; } });
+        self.mutate(|s| {
+            if let Some(d) = s.decks.get_mut(ch) {
+                d.solo = s_on;
+            }
+        });
     }
     pub fn set_filter_cutoff(&self, ch: usize, v: f32) {
         let clamped = v.clamp(0.0, 1.0);
-        self.mutate(|s| { if let Some(d) = s.decks.get_mut(ch) { d.filter_cutoff = clamped; } });
+        self.mutate(|s| {
+            if let Some(d) = s.decks.get_mut(ch) {
+                d.filter_cutoff = clamped;
+            }
+        });
     }
     pub fn set_filter_freq(&self, ch: usize, v: f32) {
         let clamped = v.clamp(0.0, 1.0);
-        self.mutate(|s| { if let Some(d) = s.decks.get_mut(ch) { d.filter_freq = clamped; } });
+        self.mutate(|s| {
+            if let Some(d) = s.decks.get_mut(ch) {
+                d.filter_freq = clamped;
+            }
+        });
     }
     pub fn set_lfo(&self, ch: usize, speed: f32, shape: f32) {
         let sp = speed.clamp(0.0, 1.0);
         let sh = shape.clamp(0.0, 1.0);
         self.mutate(|s| {
-            if let Some(d) = s.decks.get_mut(ch) { d.lfo_speed = sp; d.lfo_shape = sh; }
+            if let Some(d) = s.decks.get_mut(ch) {
+                d.lfo_speed = sp;
+                d.lfo_shape = sh;
+            }
         });
     }
     pub fn set_eq(&self, ch: usize, lo: f32, mi: f32, hi: f32) {
@@ -192,36 +256,68 @@ impl ControlState {
         let m = mi.clamp(-24.0, 24.0);
         let h = hi.clamp(-24.0, 24.0);
         self.mutate(|s| {
-            if let Some(d) = s.decks.get_mut(ch) { d.eq_low = l; d.eq_mid = m; d.eq_high = h; }
+            if let Some(d) = s.decks.get_mut(ch) {
+                d.eq_low = l;
+                d.eq_mid = m;
+                d.eq_high = h;
+            }
         });
     }
     pub fn set_eq_kill(&self, ch: usize, lo: bool, mi: bool, hi: bool) {
         self.mutate(|s| {
             if let Some(d) = s.decks.get_mut(ch) {
-                d.eq_low_kill = lo; d.eq_mid_kill = mi; d.eq_high_kill = hi;
+                d.eq_low_kill = lo;
+                d.eq_mid_kill = mi;
+                d.eq_high_kill = hi;
             }
         });
     }
     pub fn set_pan(&self, ch: usize, v: f32) {
         let clamped = v.clamp(-1.0, 1.0);
-        self.mutate(|s| { if let Some(d) = s.decks.get_mut(ch) { d.pan = clamped; } });
+        self.mutate(|s| {
+            if let Some(d) = s.decks.get_mut(ch) {
+                d.pan = clamped;
+            }
+        });
     }
     pub fn set_master_fader(&self, v: f32) {
         let clamped = v.clamp(0.0, 1.0);
-        self.mutate(|s| { s.master.fader = clamped; });
+        self.mutate(|s| {
+            s.master.fader = clamped;
+        });
     }
     pub fn set_crossfader(&self, v: f32) {
         // App uses -1.0..+1.0, engine uses 0.0..1.0 (0=full A, 1=full B)
         let clamped = ((v + 1.0) / 2.0).clamp(0.0, 1.0);
-        self.mutate(|s| { s.master.crossfader = clamped; });
+        self.mutate(|s| {
+            s.master.crossfader = clamped;
+        });
     }
     pub fn set_solo_active(&self, s_on: bool) {
-        self.mutate(|s| { s.master.solo_active = s_on; });
+        self.mutate(|s| {
+            s.master.solo_active = s_on;
+        });
     }
     pub fn set_master_eq(&self, bands: [f32; 10]) {
-        self.mutate(|s| { s.master.master_eq = bands; });
+        self.mutate(|s| {
+            s.master.master_eq = bands;
+        });
+    }
+    #[allow(dead_code)]
+    pub fn set_mic_gain(&self, gain: f32) {
+        self.mutate(|s| {
+            s.mic.gain = gain.clamp(0.0, 4.0);
+        });
+    }
+    #[allow(dead_code)]
+    pub fn set_mic_muted(&self, muted: bool) {
+        self.mutate(|s| {
+            s.mic.muted = muted;
+        });
     }
     pub fn set_sequences(&self, seqs: Vec<SequenceSnapshot>) {
-        self.mutate(|s| { s.sequences = seqs; });
+        self.mutate(|s| {
+            s.sequences = seqs;
+        });
     }
 }

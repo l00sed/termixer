@@ -5,10 +5,15 @@ use std::f32::consts::TAU;
 /// parameters change (e.g. filter cutoff sweep).
 #[derive(Clone)]
 pub struct Biquad {
-    b0: f32, b1: f32, b2: f32,
-    a1: f32, a2: f32,
-    x1: f32, x2: f32,
-    y1: f32, y2: f32,
+    b0: f32,
+    b1: f32,
+    b2: f32,
+    a1: f32,
+    a2: f32,
+    x1: f32,
+    x2: f32,
+    y1: f32,
+    y2: f32,
     sample_rate: f32,
 }
 
@@ -20,10 +25,15 @@ pub enum FilterType {
 impl Biquad {
     pub fn new(sample_rate: f32) -> Self {
         Self {
-            b0: 1.0, b1: 0.0, b2: 0.0,
-            a1: 0.0, a2: 0.0,
-            x1: 0.0, x2: 0.0,
-            y1: 0.0, y2: 0.0,
+            b0: 1.0,
+            b1: 0.0,
+            b2: 0.0,
+            a1: 0.0,
+            a2: 0.0,
+            x1: 0.0,
+            x2: 0.0,
+            y1: 0.0,
+            y2: 0.0,
             sample_rate,
         }
     }
@@ -58,15 +68,24 @@ impl Biquad {
     #[inline]
     pub fn tick(&mut self, x: f32) -> f32 {
         let y = self.b0 * x + self.b1 * self.x1 + self.b2 * self.x2
-              - self.a1 * self.y1 - self.a2 * self.y2;
+            - self.a1 * self.y1
+            - self.a2 * self.y2;
 
         // Flush denormals to zero. When filters heavily attenuate, state
         // variables go subnormal — on x86 that's ~100x slower, causing the
         // audio callback to overrun and cpal to drop buffers (pausing).
         const DENORMAL: f32 = 1e-18;
-        self.x2 = if self.x1.abs() < DENORMAL { 0.0 } else { self.x1 };
+        self.x2 = if self.x1.abs() < DENORMAL {
+            0.0
+        } else {
+            self.x1
+        };
         self.x1 = x;
-        self.y2 = if self.y1.abs() < DENORMAL { 0.0 } else { self.y1 };
+        self.y2 = if self.y1.abs() < DENORMAL {
+            0.0
+        } else {
+            self.y1
+        };
         self.y1 = if y.abs() < DENORMAL { 0.0 } else { y };
         self.y1
     }
@@ -84,7 +103,14 @@ pub struct LfoOsc {
 
 impl LfoOsc {
     pub fn new(sample_rate: f32) -> Self {
-        Self { phase: 0.0, sample_rate, speed: 0.0, shape: 0.0, freq_hz: 0.0, prev_speed: 0.0 }
+        Self {
+            phase: 0.0,
+            sample_rate,
+            speed: 0.0,
+            shape: 0.0,
+            freq_hz: 0.0,
+            prev_speed: 0.0,
+        }
     }
 
     pub fn set_speed(&mut self, speed: f32) {
@@ -130,7 +156,8 @@ pub fn pan_gains(pan: f32) -> (f32, f32) {
     //   pan=-1 → angle=0    → (1.0, 0.0)  full left
     //   pan= 0 → angle=π/4  → (0.707, 0.707)  center
     //   pan=+1 → angle=π/2  → (0.0, 1.0)  full right
-    let angle = ((pan + 1.0) * 0.25 * std::f32::consts::FRAC_PI_2 * 2.0).clamp(0.0, std::f32::consts::FRAC_PI_2);
+    let angle = ((pan + 1.0) * 0.25 * std::f32::consts::FRAC_PI_2 * 2.0)
+        .clamp(0.0, std::f32::consts::FRAC_PI_2);
     (angle.cos(), angle.sin())
 }
 
@@ -168,10 +195,14 @@ impl Svf {
         let tau_s = 0.004;
         let smooth_coef = 1.0 - (-1.0 / (tau_s * sample_rate)).exp();
         Self {
-            ic1eq_l: 0.0, ic2eq_l: 0.0,
-            ic1eq_r: 0.0, ic2eq_r: 0.0,
-            log_freq, k,
-            target_log_freq: log_freq, target_k: k,
+            ic1eq_l: 0.0,
+            ic2eq_l: 0.0,
+            ic1eq_r: 0.0,
+            ic2eq_r: 0.0,
+            log_freq,
+            k,
+            target_log_freq: log_freq,
+            target_k: k,
             smooth_coef,
             sample_rate,
         }
@@ -200,7 +231,7 @@ impl Svf {
         // Smooth log-frequency + k with one-pole toward target.
         let a = self.smooth_coef;
         self.log_freq += (self.target_log_freq - self.log_freq) * a;
-        self.k        += (self.target_k        - self.k)        * a;
+        self.k += (self.target_k - self.k) * a;
 
         let freq = self.log_freq.exp();
         let g = (std::f32::consts::PI * freq / self.sample_rate).tan();
@@ -280,8 +311,10 @@ pub fn soft_limit(x: f32) -> f32 {
 /// eats headroom and causes speaker thump.
 #[derive(Clone)]
 pub struct DcBlocker {
-    x1_l: f32, y1_l: f32,
-    x1_r: f32, y1_r: f32,
+    x1_l: f32,
+    y1_l: f32,
+    x1_r: f32,
+    y1_r: f32,
     r: f32,
 }
 
@@ -289,15 +322,23 @@ impl DcBlocker {
     pub fn new(sample_rate: f32) -> Self {
         // Cutoff ~20 Hz: R = 1 - 2*pi*fc/fs
         let r = 1.0 - (std::f32::consts::TAU * 20.0 / sample_rate);
-        Self { x1_l: 0.0, y1_l: 0.0, x1_r: 0.0, y1_r: 0.0, r }
+        Self {
+            x1_l: 0.0,
+            y1_l: 0.0,
+            x1_r: 0.0,
+            y1_r: 0.0,
+            r,
+        }
     }
 
     #[inline]
     pub fn tick(&mut self, l: f32, r_in: f32) -> (f32, f32) {
         let y_l = l - self.x1_l + self.r * self.y1_l;
-        self.x1_l = l; self.y1_l = y_l;
+        self.x1_l = l;
+        self.y1_l = y_l;
         let y_r = r_in - self.x1_r + self.r * self.y1_r;
-        self.x1_r = r_in; self.y1_r = y_r;
+        self.x1_r = r_in;
+        self.y1_r = y_r;
         (y_l, y_r)
     }
 }
@@ -313,7 +354,13 @@ pub struct LevelMeter {
 
 impl LevelMeter {
     pub fn new() -> Self {
-        Self { peak_l: 0.0, peak_r: 0.0, rms_ll: 0.0, rms_rr: 0.0, count: 0 }
+        Self {
+            peak_l: 0.0,
+            peak_r: 0.0,
+            rms_ll: 0.0,
+            rms_rr: 0.0,
+            count: 0,
+        }
     }
 
     pub fn push_stereo(&mut self, l: f32, r: f32) {
@@ -330,8 +377,10 @@ impl LevelMeter {
         let rms_r = (self.rms_rr / n).sqrt() as f32;
         let peak_l = self.peak_l;
         let peak_r = self.peak_r;
-        self.peak_l = 0.0; self.peak_r = 0.0;
-        self.rms_ll = 0.0; self.rms_rr = 0.0;
+        self.peak_l = 0.0;
+        self.peak_r = 0.0;
+        self.rms_ll = 0.0;
+        self.rms_rr = 0.0;
         self.count = 0;
         (peak_l, peak_r, rms_l, rms_r)
     }

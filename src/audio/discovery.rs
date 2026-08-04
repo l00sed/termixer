@@ -115,7 +115,9 @@ impl SourceDiscovery {
                 if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
                     // Only discover .sock files — .pcm FIFOs are handled
                     // automatically by the engine when a matching socket is found.
-                    if !name.ends_with(".sock") { continue; }
+                    if !name.ends_with(".sock") {
+                        continue;
+                    }
                     if name.starts_with("mpv") && name.ends_with(".sock")
                         || (name.starts_with("mpv") && name.contains("socket"))
                     {
@@ -138,34 +140,44 @@ impl SourceDiscovery {
     fn discover_supercollider(&mut self) {
         // Check if scsynth is running
         if let Ok(output) = Command::new("pgrep").arg("-x").arg("scsynth").output()
-            && output.status.success() {
-                // scsynth typically listens on UDP 57110
-                self.sources.push(DiscoveredSource {
-                    name: "SuperCollider (scsynth)".to_string(),
-                    source_type: SourceType::SuperCollider,
-                    identifier: "udp://127.0.0.1:57110".to_string(),
-                });
-            }
+            && output.status.success()
+        {
+            // scsynth typically listens on UDP 57110
+            self.sources.push(DiscoveredSource {
+                name: "SuperCollider (scsynth)".to_string(),
+                source_type: SourceType::SuperCollider,
+                identifier: "udp://127.0.0.1:57110".to_string(),
+            });
+        }
 
         // Check for sclang (might have custom server)
         if let Ok(output) = Command::new("pgrep").arg("-x").arg("sclang").output()
-            && output.status.success() && !self.sources.iter().any(|s| s.source_type == SourceType::SuperCollider) {
-                self.sources.push(DiscoveredSource {
-                    name: "SuperCollider (sclang)".to_string(),
-                    source_type: SourceType::SuperCollider,
-                    identifier: "sclang".to_string(),
-                });
-            }
+            && output.status.success()
+            && !self
+                .sources
+                .iter()
+                .any(|s| s.source_type == SourceType::SuperCollider)
+        {
+            self.sources.push(DiscoveredSource {
+                name: "SuperCollider (sclang)".to_string(),
+                source_type: SourceType::SuperCollider,
+                identifier: "sclang".to_string(),
+            });
+        }
     }
 
     /// Discover PulseAudio sink inputs
     fn discover_pulseaudio(&mut self) {
         // Use pactl to list sink inputs
-        if let Ok(output) = Command::new("pactl").arg("list").arg("sink-inputs").output()
-            && output.status.success() {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                self.parse_pulseaudio_output(&stdout);
-            }
+        if let Ok(output) = Command::new("pactl")
+            .arg("list")
+            .arg("sink-inputs")
+            .output()
+            && output.status.success()
+        {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            self.parse_pulseaudio_output(&stdout);
+        }
     }
 
     fn parse_pulseaudio_output(&mut self, output: &str) {
@@ -209,10 +221,11 @@ impl SourceDiscovery {
     fn discover_pipewire(&mut self) {
         // Use pw-cli to list nodes
         if let Ok(output) = Command::new("pw-cli").arg("list-objects").output()
-            && output.status.success() {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                self.parse_pipewire_output(&stdout);
-            }
+            && output.status.success()
+        {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            self.parse_pipewire_output(&stdout);
+        }
     }
 
     fn parse_pipewire_output(&mut self, output: &str) {
@@ -232,7 +245,11 @@ impl SourceDiscovery {
                         .trim_matches('"');
 
                     // Avoid duplicates
-                    if !self.sources.iter().any(|s| s.name == name && s.source_type == SourceType::PipeWire) {
+                    if !self
+                        .sources
+                        .iter()
+                        .any(|s| s.name == name && s.source_type == SourceType::PipeWire)
+                    {
                         self.sources.push(DiscoveredSource {
                             name: name.to_string(),
                             source_type: SourceType::PipeWire,
@@ -248,10 +265,11 @@ impl SourceDiscovery {
     fn discover_jack(&mut self) {
         // Check if JACK is running
         if let Ok(output) = Command::new("jack_lsp").output()
-            && output.status.success() {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                self.parse_jack_output(&stdout);
-            }
+            && output.status.success()
+        {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            self.parse_jack_output(&stdout);
+        }
     }
 
     fn parse_jack_output(&mut self, output: &str) {
@@ -281,26 +299,31 @@ impl SourceDiscovery {
     /// Discover microphones/input devices
     fn discover_microphones(&mut self) {
         // Try PulseAudio sources first
-        if let Ok(output) = Command::new("pactl").arg("list").arg("sources").arg("short").output()
-            && output.status.success() {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                for line in stdout.lines() {
-                    let parts: Vec<&str> = line.split('\t').collect();
-                    if parts.len() >= 2 {
-                        let name = parts[1];
-                        // Filter to actual microphones (not monitors)
-                        if !name.contains(".monitor")
-                            && (name.contains("input") || name.contains("mic") || name.contains("Mic"))
-                        {
-                            self.sources.push(DiscoveredSource {
-                                name: name.to_string(),
-                                source_type: SourceType::Microphone,
-                                identifier: name.to_string(),
-                            });
-                        }
+        if let Ok(output) = Command::new("pactl")
+            .arg("list")
+            .arg("sources")
+            .arg("short")
+            .output()
+            && output.status.success()
+        {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            for line in stdout.lines() {
+                let parts: Vec<&str> = line.split('\t').collect();
+                if parts.len() >= 2 {
+                    let name = parts[1];
+                    // Filter to actual microphones (not monitors)
+                    if !name.contains(".monitor")
+                        && (name.contains("input") || name.contains("mic") || name.contains("Mic"))
+                    {
+                        self.sources.push(DiscoveredSource {
+                            name: name.to_string(),
+                            source_type: SourceType::Microphone,
+                            identifier: name.to_string(),
+                        });
                     }
                 }
             }
+        }
 
         // Fallback: check /proc/asound for ALSA devices (Linux)
         #[cfg(target_os = "linux")]
@@ -311,7 +334,11 @@ impl SourceDiscovery {
                 if name_str.starts_with("card") {
                     if let Ok(card_name) = std::fs::read_to_string(entry.path().join("id")) {
                         let card_name = card_name.trim();
-                        if !self.sources.iter().any(|s| s.name == card_name && s.source_type == SourceType::Microphone) {
+                        if !self
+                            .sources
+                            .iter()
+                            .any(|s| s.name == card_name && s.source_type == SourceType::Microphone)
+                        {
                             self.sources.push(DiscoveredSource {
                                 name: card_name.to_string(),
                                 source_type: SourceType::Microphone,
@@ -330,22 +357,25 @@ impl SourceDiscovery {
                 .arg("SPAudioDataType")
                 .arg("-json")
                 .output()
-                && output.status.success() {
-                    // Parse JSON output for input devices
-                    if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&output.stdout)
-                        && let Some(audio_data) = json.get("SPAudioDataType").and_then(|v| v.as_array()) {
-                            for device in audio_data {
-                                if let Some(name) = device.get("_name").and_then(|v| v.as_str())
-                                    && device.get("coreaudio_input_source").is_some() {
-                                        self.sources.push(DiscoveredSource {
-                                            name: name.to_string(),
-                                            source_type: SourceType::Microphone,
-                                            identifier: format!("coreaudio:{}", name),
-                                        });
-                                    }
-                            }
+                && output.status.success()
+            {
+                // Parse JSON output for input devices
+                if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&output.stdout)
+                    && let Some(audio_data) = json.get("SPAudioDataType").and_then(|v| v.as_array())
+                {
+                    for device in audio_data {
+                        if let Some(name) = device.get("_name").and_then(|v| v.as_str())
+                            && device.get("coreaudio_input_source").is_some()
+                        {
+                            self.sources.push(DiscoveredSource {
+                                name: name.to_string(),
+                                source_type: SourceType::Microphone,
+                                identifier: format!("coreaudio:{}", name),
+                            });
                         }
+                    }
                 }
+            }
         }
     }
 }

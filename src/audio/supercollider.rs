@@ -56,8 +56,7 @@ impl SuperColliderClient {
             }
         }
         if !alive {
-            return Err("SuperCollider server not responding on ".to_string()
-                + &self.addr);
+            return Err("SuperCollider server not responding on ".to_string() + &self.addr);
         }
 
         self.socket = Some(socket);
@@ -81,18 +80,24 @@ impl SuperColliderClient {
     /// After sending, call `create_group()` and `create_synth()` to activate.
     pub fn send_synth_def(&mut self) -> Result<(), String> {
         let synthdef_files = ["mixerChannel.scsyndef"];
-        
+
         for filename in &synthdef_files {
             let paths = [
                 format!("synthdefs/{}", filename),
                 format!("../synthdefs/{}", filename),
                 format!("../../synthdefs/{}", filename),
             ];
-            
-            let def_bytes = paths.iter()
+
+            let def_bytes = paths
+                .iter()
                 .find_map(|p| std::fs::read(p).ok())
-                .ok_or_else(|| format!("{}.scsyndef not found. Run: sclang synthdefs/mixerChannel.scd", filename))?;
-            
+                .ok_or_else(|| {
+                    format!(
+                        "{}.scsyndef not found. Run: sclang synthdefs/mixerChannel.scd",
+                        filename
+                    )
+                })?;
+
             let mut msg = Vec::new();
             Self::write_osc_string(&mut msg, "/d_recv");
             Self::write_osc_string(&mut msg, ",b");
@@ -104,7 +109,7 @@ impl SuperColliderClient {
             }
             self.send_raw(&msg)?;
         }
-        
+
         self.synth_def_sent = true;
         Ok(())
     }
@@ -138,12 +143,12 @@ impl SuperColliderClient {
             &[
                 OscType::Str("mixerChannel".to_string()),
                 OscType::Int(synth_id),
-                OscType::Int(1),  // addToTail
+                OscType::Int(1),        // addToTail
                 OscType::Int(group_id), // target: our group
                 OscType::Str("in".to_string()),
                 OscType::Int(self.input_bus),
                 OscType::Str("out".to_string()),
-                OscType::Int(0),  // write to bus 0
+                OscType::Int(0), // write to bus 0
                 OscType::Str("vol".to_string()),
                 OscType::Float(4.0),
                 OscType::Str("lpf".to_string()),
@@ -221,7 +226,6 @@ impl SuperColliderClient {
         self.set_synth_param("hpf", freq.clamp(20.0, 20000.0))
     }
 
-
     /// Set EQ (all three bands)
     pub fn set_eq(&self, low: f32, mid: f32, high: f32) -> Result<(), String> {
         // Low: cut with lowpass, boost with low shelf
@@ -263,8 +267,8 @@ impl SuperColliderClient {
     /// Bands: 32Hz, 64Hz, 125Hz, 250Hz, 500Hz, 1kHz, 2kHz, 4kHz, 8kHz, 16kHz
     pub fn set_master_eq(&self, bands: &[f32; 10]) -> Result<(), String> {
         let param_names = [
-            "mEq32", "mEq64", "mEq125", "mEq250", "mEq500",
-            "mEq1k", "mEq2k", "mEq4k", "mEq8k", "mEq16k",
+            "mEq32", "mEq64", "mEq125", "mEq250", "mEq500", "mEq1k", "mEq2k", "mEq4k", "mEq8k",
+            "mEq16k",
         ];
         for (name, &gain) in param_names.iter().zip(bands.iter()) {
             self.set_synth_param(name, gain.clamp(-12.0, 12.0))?;
@@ -323,7 +327,6 @@ impl SuperColliderClient {
             buf.push(0);
         }
     }
-
 }
 
 enum OscType {

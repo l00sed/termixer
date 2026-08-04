@@ -8,9 +8,12 @@ use rtrb::{Consumer, Producer, RingBuffer};
 
 use crate::audio::backend::{backend_label, default_backend};
 use crate::audio::decoder::{AtomicF64, AudioRingBuf, DecoderThread};
-use crate::audio::dsp::{AtomicMeter, Biquad, DcBlocker, FilterType, LfoOsc, Svf, pan_gains, soft_limit};
-use crate::state::MASTER_EQ_FREQUENCIES;
+use crate::audio::dsp::{
+    AtomicMeter, Biquad, DcBlocker, FilterType, LfoOsc, Svf, pan_gains, soft_limit,
+};
+use crate::audio::mic::{MicInputDevice, enumerate_input_devices, input_devices};
 use crate::audio::pipe_capture::PipeCaptureThread;
+use crate::state::MASTER_EQ_FREQUENCIES;
 
 /// Shared cache of pre-decoded pad samples: (samples, sample_rate) per pad slot.
 type PadSampleCache = Arc<std::sync::RwLock<Vec<Option<Arc<(Vec<f32>, u32)>>>>>;
@@ -39,7 +42,8 @@ mod macos_volume {
     const K_AUDIO_OBJECT_PROPERTY_ELEMENT_MAIN: AudioObjectPropertyElement = 0;
     const K_AUDIO_HARDWARE_PROPERTY_DEFAULT_OUTPUT_DEVICE: AudioObjectPropertySelector = 0x644F7574;
     #[allow(dead_code)]
-    const K_AUDIO_HARDWARE_SERVICE_DEVICE_PROPERTY_VIRTUAL_MAIN_VOLUME: AudioObjectPropertySelector = 0x766D766C; // 'vmvl'
+    const K_AUDIO_HARDWARE_SERVICE_DEVICE_PROPERTY_VIRTUAL_MAIN_VOLUME:
+        AudioObjectPropertySelector = 0x766D766C; // 'vmvl'
     #[allow(dead_code)]
     const K_AUDIO_OBJECT_PROPERTY_SCOPE_OUTPUT: AudioObjectPropertyScope = 0x6F757470; // 'outp'
 
@@ -85,8 +89,13 @@ mod macos_volume {
             if status != 0 || device_id == 0 {
                 let c = FAIL_LOGCTR.fetch_add(1, Ordering::Relaxed);
                 if c < 5 {
-                    let _ = std::fs::write("/tmp/termixer_hp_debug.log",
-                        format!("read_vol FAIL: default_device status={} id={}\n", status, device_id));
+                    let _ = std::fs::write(
+                        "/tmp/termixer_hp_debug.log",
+                        format!(
+                            "read_vol FAIL: default_device status={} id={}\n",
+                            status, device_id
+                        ),
+                    );
                 }
                 return None;
             }
@@ -112,8 +121,10 @@ mod macos_volume {
             if status == 0 {
                 let c = FAIL_LOGCTR.fetch_add(1, Ordering::Relaxed);
                 if c < 3 {
-                    let _ = std::fs::write("/tmp/termixer_hp_debug.log",
-                        format!("read_vol OK: vol_scalar elem1 = {:.3}\n", volume));
+                    let _ = std::fs::write(
+                        "/tmp/termixer_hp_debug.log",
+                        format!("read_vol OK: vol_scalar elem1 = {:.3}\n", volume),
+                    );
                 }
                 return Some(volume.clamp(0.0, 1.0));
             }
@@ -133,8 +144,10 @@ mod macos_volume {
             if status == 0 {
                 let c = FAIL_LOGCTR.fetch_add(1, Ordering::Relaxed);
                 if c < 3 {
-                    let _ = std::fs::write("/tmp/termixer_hp_debug.log",
-                        format!("read_vol OK: vol_scalar elem0 = {:.3}\n", volume));
+                    let _ = std::fs::write(
+                        "/tmp/termixer_hp_debug.log",
+                        format!("read_vol OK: vol_scalar elem0 = {:.3}\n", volume),
+                    );
                 }
                 return Some(volume.clamp(0.0, 1.0));
             }
@@ -156,16 +169,23 @@ mod macos_volume {
             if status == 0 {
                 let c = FAIL_LOGCTR.fetch_add(1, Ordering::Relaxed);
                 if c < 3 {
-                    let _ = std::fs::write("/tmp/termixer_hp_debug.log",
-                        format!("read_vol OK: vmvl_global = {:.3}\n", volume));
+                    let _ = std::fs::write(
+                        "/tmp/termixer_hp_debug.log",
+                        format!("read_vol OK: vmvl_global = {:.3}\n", volume),
+                    );
                 }
                 return Some(volume.clamp(0.0, 1.0));
             }
 
             let c = FAIL_LOGCTR.fetch_add(1, Ordering::Relaxed);
             if c < 5 {
-                let _ = std::fs::write("/tmp/termixer_hp_debug.log",
-                    format!("read_vol FAIL: all 3 properties failed on device_id={}\n", device_id));
+                let _ = std::fs::write(
+                    "/tmp/termixer_hp_debug.log",
+                    format!(
+                        "read_vol FAIL: all 3 properties failed on device_id={}\n",
+                        device_id
+                    ),
+                );
             }
             None
         }
@@ -191,10 +211,16 @@ mod macos_volume {
             let mut default_id: AudioObjectID = 0;
             let mut size = std::mem::size_of::<AudioObjectID>() as u32;
             let status = AudioObjectGetPropertyData(
-                K_AUDIO_OBJECT_SYSTEM_OBJECT, &def_prop, 0, std::ptr::null(),
-                &mut size, &mut default_id as *mut _ as *mut c_void,
+                K_AUDIO_OBJECT_SYSTEM_OBJECT,
+                &def_prop,
+                0,
+                std::ptr::null(),
+                &mut size,
+                &mut default_id as *mut _ as *mut c_void,
             );
-            if status != 0 || default_id == 0 { return; }
+            if status != 0 || default_id == 0 {
+                return;
+            }
 
             // Get all device IDs
             let dev_prop = AudioObjectPropertyAddress {
@@ -204,18 +230,30 @@ mod macos_volume {
             };
             let mut size: u32 = 0;
             let status = AudioObjectGetPropertyData(
-                K_AUDIO_OBJECT_SYSTEM_OBJECT, &dev_prop, 0, std::ptr::null(),
-                &mut size, std::ptr::null_mut(),
+                K_AUDIO_OBJECT_SYSTEM_OBJECT,
+                &dev_prop,
+                0,
+                std::ptr::null(),
+                &mut size,
+                std::ptr::null_mut(),
             );
-            if status != 0 || size == 0 { return; }
+            if status != 0 || size == 0 {
+                return;
+            }
 
             let count = size as usize / std::mem::size_of::<AudioObjectID>();
             let mut device_ids: Vec<AudioObjectID> = vec![0; count];
             let status = AudioObjectGetPropertyData(
-                K_AUDIO_OBJECT_SYSTEM_OBJECT, &dev_prop, 0, std::ptr::null(),
-                &mut size, device_ids.as_mut_ptr() as *mut c_void,
+                K_AUDIO_OBJECT_SYSTEM_OBJECT,
+                &dev_prop,
+                0,
+                std::ptr::null(),
+                &mut size,
+                device_ids.as_mut_ptr() as *mut c_void,
             );
-            if status != 0 { return; }
+            if status != 0 {
+                return;
+            }
 
             // Set volume on every output device except the default
             let vol_prop = AudioObjectPropertyAddress {
@@ -226,7 +264,9 @@ mod macos_volume {
             let clamped = vol.clamp(0.0, 1.0);
 
             for &did in &device_ids {
-                if did == default_id { continue; }
+                if did == default_id {
+                    continue;
+                }
                 // Skip devices that have no output streams
                 let streams_prop = AudioObjectPropertyAddress {
                     mSelector: 0x7374726D, // kAudioDevicePropertyStreams
@@ -235,13 +275,22 @@ mod macos_volume {
                 };
                 let mut stream_size: u32 = 0;
                 let s = AudioObjectGetPropertyData(
-                    did, &streams_prop, 0, std::ptr::null(),
-                    &mut stream_size, std::ptr::null_mut(),
+                    did,
+                    &streams_prop,
+                    0,
+                    std::ptr::null(),
+                    &mut stream_size,
+                    std::ptr::null_mut(),
                 );
-                if s != 0 || stream_size == 0 { continue; }
+                if s != 0 || stream_size == 0 {
+                    continue;
+                }
 
                 AudioObjectSetPropertyData(
-                    did, &vol_prop, 0, std::ptr::null(),
+                    did,
+                    &vol_prop,
+                    0,
+                    std::ptr::null(),
                     std::mem::size_of::<f32>() as u32,
                     &clamped as *const _ as *const c_void,
                 );
@@ -266,14 +315,102 @@ const SEEK_SENTINEL: f64 = -1.0;
 
 mod inner;
 
+#[allow(unused_imports)]
+pub use inner::MicState;
 pub use inner::{AudioCommand, ControlSnapshot, ControlState, DeckState, SequenceSnapshot};
 
 const MAX_DECKS: usize = 3;
 const CMD_RING_CAPACITY: usize = 64;
+const MIC_RING_CAPACITY: usize = 32768;
 const MAX_PAD_VOICES: usize = 16;
 const PAD_RING_SIZE: usize = 48000; // ~1 second at 48kHz mono
 const HPF_MAX_FREQ_POS: f32 = 0.75;
 const CAPTURE_REVERSE_LOOKBACK_SECS: f32 = 2.0;
+
+#[allow(dead_code)]
+enum MicCommand {
+    Replace {
+        consumer: Consumer<f32>,
+        sample_rate: u32,
+    },
+}
+
+struct MicReader {
+    consumer: Option<Consumer<f32>>,
+    input_rate: f32,
+    output_rate: f32,
+    phase: f32,
+    current: [f32; 2],
+    next: [f32; 2],
+    primed: bool,
+}
+
+impl MicReader {
+    fn new(output_rate: f32) -> Self {
+        Self {
+            consumer: None,
+            input_rate: output_rate,
+            output_rate,
+            phase: 0.0,
+            current: [0.0; 2],
+            next: [0.0; 2],
+            primed: false,
+        }
+    }
+
+    fn replace(&mut self, consumer: Consumer<f32>, sample_rate: u32) {
+        self.consumer = Some(consumer);
+        self.input_rate = sample_rate as f32;
+        self.phase = 0.0;
+        self.primed = false;
+    }
+
+    fn pop_frame(consumer: &mut Consumer<f32>) -> Option<[f32; 2]> {
+        if consumer.slots() < 2 {
+            return None;
+        }
+        Some([consumer.pop().ok()?, consumer.pop().ok()?])
+    }
+
+    fn next_frame(&mut self) -> [f32; 2] {
+        let Some(consumer) = self.consumer.as_mut() else {
+            return [0.0; 2];
+        };
+
+        if !self.primed {
+            let Some(current) = Self::pop_frame(consumer) else {
+                return [0.0; 2];
+            };
+            let Some(next) = Self::pop_frame(consumer) else {
+                return [0.0; 2];
+            };
+            self.current = current;
+            self.next = next;
+            self.primed = true;
+        }
+
+        let output = [
+            self.current[0] + (self.next[0] - self.current[0]) * self.phase,
+            self.current[1] + (self.next[1] - self.current[1]) * self.phase,
+        ];
+        let occupancy_frames = consumer.slots() as f32 * 0.5;
+        let target_frames = MIC_RING_CAPACITY as f32 * 0.25;
+        let correction =
+            ((occupancy_frames - target_frames) / target_frames).clamp(-1.0, 1.0) * 0.002;
+        self.phase += (self.input_rate / self.output_rate) * (1.0 + correction);
+
+        while self.phase >= 1.0 {
+            let Some(next) = Self::pop_frame(consumer) else {
+                self.primed = false;
+                return output;
+            };
+            self.current = self.next;
+            self.next = next;
+            self.phase -= 1.0;
+        }
+        output
+    }
+}
 
 /// Per-deck DSP chain: SVF for cutoff, biquads for EQ, LFO, DC blocker.
 struct DspFilters {
@@ -339,9 +476,12 @@ impl DspFilters {
         Self {
             svf1: Svf::new(sr),
             svf2: Svf::new(sr),
-            eq_lo_l, eq_lo_r,
-            eq_mi_l, eq_mi_r,
-            eq_hi_l, eq_hi_r,
+            eq_lo_l,
+            eq_lo_r,
+            eq_mi_l,
+            eq_mi_r,
+            eq_hi_l,
+            eq_hi_r,
             lfo: LfoOsc::new(sr),
             lfo_active: false,
             dc: DcBlocker::new(sr),
@@ -435,21 +575,31 @@ impl DspFilters {
         // EQ: set coefficients directly on per-channel biquads (no crossfade — EQ changes slowly)
         let eq_lo_gain = if ctrl.eq_low_kill { -48.0 } else { ctrl.eq_low };
         let eq_mi_gain = if ctrl.eq_mid_kill { -48.0 } else { ctrl.eq_mid };
-        let eq_hi_gain = if ctrl.eq_high_kill { -48.0 } else { ctrl.eq_high };
+        let eq_hi_gain = if ctrl.eq_high_kill {
+            -48.0
+        } else {
+            ctrl.eq_high
+        };
         // Only recalculate biquad coefficients when gain actually changes
         if eq_lo_gain != self.prev_eq_low {
-            self.eq_lo_l.set_params(FilterType::Peaking, 80.0, 0.707, eq_lo_gain);
-            self.eq_lo_r.set_params(FilterType::Peaking, 80.0, 0.707, eq_lo_gain);
+            self.eq_lo_l
+                .set_params(FilterType::Peaking, 80.0, 0.707, eq_lo_gain);
+            self.eq_lo_r
+                .set_params(FilterType::Peaking, 80.0, 0.707, eq_lo_gain);
             self.prev_eq_low = eq_lo_gain;
         }
         if eq_mi_gain != self.prev_eq_mid {
-            self.eq_mi_l.set_params(FilterType::Peaking, 1000.0, 0.707, eq_mi_gain);
-            self.eq_mi_r.set_params(FilterType::Peaking, 1000.0, 0.707, eq_mi_gain);
+            self.eq_mi_l
+                .set_params(FilterType::Peaking, 1000.0, 0.707, eq_mi_gain);
+            self.eq_mi_r
+                .set_params(FilterType::Peaking, 1000.0, 0.707, eq_mi_gain);
             self.prev_eq_mid = eq_mi_gain;
         }
         if eq_hi_gain != self.prev_eq_hi {
-            self.eq_hi_l.set_params(FilterType::Peaking, 8000.0, 0.707, eq_hi_gain);
-            self.eq_hi_r.set_params(FilterType::Peaking, 8000.0, 0.707, eq_hi_gain);
+            self.eq_hi_l
+                .set_params(FilterType::Peaking, 8000.0, 0.707, eq_hi_gain);
+            self.eq_hi_r
+                .set_params(FilterType::Peaking, 8000.0, 0.707, eq_hi_gain);
             self.prev_eq_hi = eq_hi_gain;
         }
 
@@ -457,8 +607,18 @@ impl DspFilters {
         // Only recalculate master EQ biquads when gains change
         for (i, band_db) in self.master_eq.iter().enumerate() {
             if *band_db != self.prev_master_eq[i] {
-                self.master_eq_l[i].set_params(FilterType::Peaking, MASTER_EQ_FREQUENCIES[i], 1.0, *band_db);
-                self.master_eq_r[i].set_params(FilterType::Peaking, MASTER_EQ_FREQUENCIES[i], 1.0, *band_db);
+                self.master_eq_l[i].set_params(
+                    FilterType::Peaking,
+                    MASTER_EQ_FREQUENCIES[i],
+                    1.0,
+                    *band_db,
+                );
+                self.master_eq_r[i].set_params(
+                    FilterType::Peaking,
+                    MASTER_EQ_FREQUENCIES[i],
+                    1.0,
+                    *band_db,
+                );
                 self.prev_master_eq[i] = *band_db;
             }
         }
@@ -487,24 +647,37 @@ impl DspFilters {
         let in_release = 0.006;
         let out_attack = 0.12;
         let out_release = 0.01;
-        let in_coef = if input_energy > self.in_energy_env { in_attack } else { in_release };
-        let out_coef = if filtered_energy > self.out_energy_env { out_attack } else { out_release };
+        let in_coef = if input_energy > self.in_energy_env {
+            in_attack
+        } else {
+            in_release
+        };
+        let out_coef = if filtered_energy > self.out_energy_env {
+            out_attack
+        } else {
+            out_release
+        };
         self.in_energy_env += (input_energy - self.in_energy_env) * in_coef;
         self.out_energy_env += (filtered_energy - self.out_energy_env) * out_coef;
 
-        let energy_match = (self.in_energy_env / self.out_energy_env).sqrt().clamp(0.35, 3.0);
+        let energy_match = (self.in_energy_env / self.out_energy_env)
+            .sqrt()
+            .clamp(0.35, 3.0);
         let hp_focus = self.hp_blend;
         let lp_focus = 1.0 - hp_focus;
         let intensity = self.filter_intensity;
-        let max_boost = 1.0
-            + intensity * (0.08 + hp_focus * (0.75 + 0.35 * (1.0 - openness)));
+        let max_boost = 1.0 + intensity * (0.08 + hp_focus * (0.75 + 0.35 * (1.0 - openness)));
         let min_gain = (1.0 - intensity * (0.30 + 0.30 * lp_focus)).max(0.35);
 
         let pre_peak = l_filt.abs().max(r_filt.abs()).max(1e-6);
         let safe_makeup = (0.88 / pre_peak).clamp(0.2, 4.0);
         let target_makeup = energy_match.clamp(min_gain, max_boost).min(safe_makeup);
 
-        let smooth = if target_makeup < self.makeup_gain { 0.24 } else { 0.05 };
+        let smooth = if target_makeup < self.makeup_gain {
+            0.24
+        } else {
+            0.05
+        };
         self.makeup_gain += (target_makeup - self.makeup_gain) * smooth;
 
         l_filt *= self.makeup_gain;
@@ -527,7 +700,11 @@ impl DspFilters {
         } else {
             1.0
         };
-        let trim_smooth = if trim_target < self.trim_gain { 0.42 } else { 0.04 };
+        let trim_smooth = if trim_target < self.trim_gain {
+            0.42
+        } else {
+            0.04
+        };
         self.trim_gain += (trim_target - self.trim_gain) * trim_smooth;
         l_filt *= self.trim_gain;
         r_filt *= self.trim_gain;
@@ -544,8 +721,10 @@ impl DspFilters {
     }
 
     fn lfo_debug_line(&self) -> String {
-        format!("LFO: act={} ph={:.3} sp={:.3}",
-            self.lfo_active, self.lfo.phase, self.lfo.speed)
+        format!(
+            "LFO: act={} ph={:.3} sp={:.3}",
+            self.lfo_active, self.lfo.phase, self.lfo.speed
+        )
     }
 }
 
@@ -555,7 +734,9 @@ impl DspFilters {
 /// and uses rtrb directly.
 struct SharedBuf(Mutex<Option<Arc<AudioRingBuf>>>);
 impl SharedBuf {
-    fn new() -> Self { Self(Mutex::new(None)) }
+    fn new() -> Self {
+        Self(Mutex::new(None))
+    }
     fn set(&self, buf: Arc<AudioRingBuf>) {
         *self.0.lock().unwrap() = Some(buf);
     }
@@ -577,6 +758,14 @@ impl SharedBuf {
             .try_lock()
             .ok()
             .and_then(|guard| guard.as_ref().map(|rb| rb.readable() > 0))
+            .unwrap_or(false)
+    }
+
+    fn is_active(&self) -> bool {
+        self.0
+            .try_lock()
+            .ok()
+            .map(|guard| guard.is_some())
             .unwrap_or(false)
     }
 }
@@ -716,6 +905,9 @@ pub struct AudioEngine {
     pub lfo_debug: Arc<Mutex<String>>,
     cmd_tx: Mutex<Producer<AudioCommand>>,
     _stream: Option<cpal::Stream>,
+    mic_stream: Mutex<Option<cpal::Stream>>,
+    mic_cmd_tx: Mutex<Producer<MicCommand>>,
+    selected_mic: Mutex<Option<usize>>,
     decoders: [Mutex<Option<DecoderThread>>; 3],
     pub captures: [Mutex<Option<PipeCaptureThread>>; 3],
     bufs: [Arc<SharedBuf>; 3],
@@ -779,7 +971,10 @@ fn rate_limited_err(prefix: &'static str) -> impl Fn(cpal::StreamError) + Send +
 impl AudioEngine {
     pub fn new() -> Result<Self, String> {
         let selected_backend = default_backend();
-        eprintln!("Audio backend requested: {}", backend_label(selected_backend));
+        eprintln!(
+            "Audio backend requested: {}",
+            backend_label(selected_backend)
+        );
 
         // Detect audio system and ensure ALSA routes through it.
         // On Steam Deck and PipeWire systems, raw ALSA dmix fails because
@@ -796,12 +991,14 @@ impl AudioEngine {
         crate::audio::backend::ensure_alsa_sound_server_routing();
 
         let (cmd_producer, cmd_consumer) = RingBuffer::<AudioCommand>::new(CMD_RING_CAPACITY);
+        let (mic_cmd_producer, mic_cmd_consumer) = RingBuffer::<MicCommand>::new(4);
         // ControlState split: UI-side handle + audio-side snapshot reader.
         let (state_inner, ctrl_output) = ControlState::new();
         let state = Arc::new(state_inner);
         // ctrl_output is moved into the callback closure below.
         let mut ctrl_output_slot = Some(ctrl_output);
         let mut cmd_consumer_slot = Some(cmd_consumer);
+        let mut mic_cmd_consumer_slot = Some(mic_cmd_consumer);
 
         let meters = [(); 3].map(|_| Arc::new(AtomicMeter::new()));
         let master_meter = Arc::new(AtomicMeter::new());
@@ -811,12 +1008,10 @@ impl AudioEngine {
 
         // These don't depend on the device, define before the loop
         let bufs: [Arc<SharedBuf>; 3] = [(); 3].map(|_| Arc::new(SharedBuf::new()));
-        let decoders: [Mutex<Option<DecoderThread>>; 3] = [
-            Mutex::new(None), Mutex::new(None), Mutex::new(None),
-        ];
-        let captures: [Mutex<Option<PipeCaptureThread>>; 3] = [
-            Mutex::new(None), Mutex::new(None), Mutex::new(None),
-        ];
+        let decoders: [Mutex<Option<DecoderThread>>; 3] =
+            [Mutex::new(None), Mutex::new(None), Mutex::new(None)];
+        let captures: [Mutex<Option<PipeCaptureThread>>; 3] =
+            [Mutex::new(None), Mutex::new(None), Mutex::new(None)];
         // rtrb ring buffers for FIFO capture: consumer goes into callback,
         // producer stored in engine for handoff to pipe thread.
         // 32768 f32 samples = ~340 ms at 48 kHz stereo.
@@ -828,25 +1023,20 @@ impl AudioEngine {
             Mutex::new(Some(cap_prod_1)),
             Mutex::new(Some(cap_prod_2)),
         ];
-        let capture_seek_baseline: [Mutex<f64>; 3] = [
-            Mutex::new(0.0),
-            Mutex::new(0.0),
-            Mutex::new(0.0),
-        ];
+        let capture_seek_baseline: [Mutex<f64>; 3] =
+            [Mutex::new(0.0), Mutex::new(0.0), Mutex::new(0.0)];
         let capture_reverse: [Arc<CaptureReverseState>; 3] = [
             Arc::new(CaptureReverseState::new()),
             Arc::new(CaptureReverseState::new()),
             Arc::new(CaptureReverseState::new()),
         ];
-        let mut capture_consumers: [Option<rtrb::Consumer<f32>>; 3] = [
-            Some(cap_cons_0), Some(cap_cons_1), Some(cap_cons_2),
-        ];
+        let mut capture_consumers: [Option<rtrb::Consumer<f32>>; 3] =
+            [Some(cap_cons_0), Some(cap_cons_1), Some(cap_cons_2)];
         let lfo_debug = Arc::new(Mutex::new(String::new()));
 
         // Pad sample cache: holds Arc<Vec<f32>> for each pad's cached audio.
         // Updated from UI thread when samples are assigned; read by audio callback.
-        let pad_sample_cache: PadSampleCache =
-            Arc::new(std::sync::RwLock::new(vec![None; 16]));
+        let pad_sample_cache: PadSampleCache = Arc::new(std::sync::RwLock::new(vec![None; 16]));
 
         // Direct pad trigger flags: one AtomicBool per pad slot.
         // UI sets pad_triggers[i] = true; audio callback consumes and clears.
@@ -867,8 +1057,14 @@ impl AudioEngine {
                 .name("key-detect".into())
                 .spawn(move || {
                     while let Ok((ch, samples, sr)) = key_rx.recv() {
-                        if samples.is_empty() || ch >= 3 { continue; }
-                        let result = stratum_dsp::analyze_audio(&samples, sr, stratum_dsp::AnalysisConfig::default());
+                        if samples.is_empty() || ch >= 3 {
+                            continue;
+                        }
+                        let result = stratum_dsp::analyze_audio(
+                            &samples,
+                            sr,
+                            stratum_dsp::AnalysisConfig::default(),
+                        );
                         if let Ok(analysis) = result {
                             let key_str = analysis.key.numerical();
                             if let Ok(mut guard) = dk[ch].lock() {
@@ -900,7 +1096,8 @@ impl AudioEngine {
         // (sof-nau8821-max on Steam Deck) is tried first instead of HDMI
         // (which often has no speakers attached).
         let host = cpal::default_host();
-        let all_devices: Vec<cpal::Device> = host.output_devices()
+        let all_devices: Vec<cpal::Device> = host
+            .output_devices()
             .map_err(|e| format!("Output devices: {}", e))?
             .collect();
 
@@ -941,9 +1138,10 @@ impl AudioEngine {
         let pipewire_default: Option<cpal::Device> = if has_pipewire {
             let dev = host.default_output_device();
             if let Some(ref d) = dev
-                && let Ok(n) = d.description() {
-                    eprintln!("Audio: PipeWire default output device: {}", n);
-                }
+                && let Ok(n) = d.description()
+            {
+                eprintln!("Audio: PipeWire default output device: {}", n);
+            }
             dev
         } else {
             None
@@ -994,8 +1192,7 @@ impl AudioEngine {
                 || (lower.contains("hda-intel")
                     && !lower.contains("hdmi")
                     && !lower.contains("displayport"))
-                || (lower.contains("analog")
-                    && !lower.contains("hdmi"))
+                || (lower.contains("analog") && !lower.contains("hdmi"))
             {
                 return 100;
             }
@@ -1012,16 +1209,12 @@ impl AudioEngine {
             }
 
             // Thunderbolt audio
-            if lower.contains("thunderbolt") || lower.contains("caldigit")
-            {
+            if lower.contains("thunderbolt") || lower.contains("caldigit") {
                 return 75;
             }
 
             // Bluetooth / A2DP
-            if lower.contains("bluetooth")
-                || lower.contains("a2dp")
-                || lower.contains("bluez")
-            {
+            if lower.contains("bluetooth") || lower.contains("a2dp") || lower.contains("bluez") {
                 return 70;
             }
 
@@ -1037,16 +1230,14 @@ impl AudioEngine {
                 || lower.starts_with("asus ")   // ASUS monitors
                 || lower.starts_with("acer ")   // Acer monitors
                 || lower.starts_with("hp ")     // HP monitors
-                || lower.starts_with("viewsonic") // ViewSonic monitors
+                || lower.starts_with("viewsonic")
+            // ViewSonic monitors
             {
                 return 40;
             }
 
             // Virtual / PulseAudio sinks
-            if lower.contains("pulse")
-                || lower.contains("pipewire")
-                || lower.contains("virtual")
-            {
+            if lower.contains("pulse") || lower.contains("pipewire") || lower.contains("virtual") {
                 return 10;
             }
 
@@ -1055,14 +1246,18 @@ impl AudioEngine {
         }
 
         // Filter out null devices and score the rest
-        let mut scored: Vec<(u8, &cpal::Device)> = all_devices.iter()
+        let mut scored: Vec<(u8, &cpal::Device)> = all_devices
+            .iter()
             .filter(|d| {
-                d.description().ok()
+                d.description()
+                    .ok()
                     .map(|n| score_device(&n.to_string()) > 0)
                     .unwrap_or(true)
             })
             .map(|d| {
-                let score = d.description().ok()
+                let score = d
+                    .description()
+                    .ok()
                     .map(|n| score_device(&n.to_string()))
                     .unwrap_or(50);
                 (score, d)
@@ -1090,21 +1285,30 @@ impl AudioEngine {
         // while PipeWire has exclusive hardware control.
         let candidates: Vec<&cpal::Device> = if has_pipewire {
             if let Some(ref pw_dev) = pipewire_default {
-                let pw_name_str = pw_dev.description().ok()
-                    .map(|d| d.to_string()).unwrap_or_default();
+                let pw_name_str = pw_dev
+                    .description()
+                    .ok()
+                    .map(|d| d.to_string())
+                    .unwrap_or_default();
                 let mut list: Vec<&cpal::Device> = Vec::new();
                 list.push(pw_dev);
                 for (_, d) in scored.iter() {
-                    let d_name_str = d.description().ok()
-                        .map(|d| d.to_string()).unwrap_or_default();
+                    let d_name_str = d
+                        .description()
+                        .ok()
+                        .map(|d| d.to_string())
+                        .unwrap_or_default();
                     if !pw_name_str.is_empty() && pw_name_str == d_name_str {
                         continue;
                     }
                     list.push(*d);
                 }
                 for d in all_devices.iter() {
-                    let d_name_str = d.description().ok()
-                        .map(|d| d.to_string()).unwrap_or_default();
+                    let d_name_str = d
+                        .description()
+                        .ok()
+                        .map(|d| d.to_string())
+                        .unwrap_or_default();
                     if !pw_name_str.is_empty() && pw_name_str == d_name_str {
                         continue;
                     }
@@ -1135,16 +1339,26 @@ impl AudioEngine {
         let mut stream: Option<cpal::Stream> = None;
         let mut actual_sr: u32 = 48000;
         let mut main_device_name = String::new();
-        let mut pad_voice_producers_vec: Vec<rtrb::Producer<f32>> = Vec::with_capacity(MAX_PAD_VOICES);
-        let sequence_steps = Arc::new((0..MAX_PAD_VOICES).map(|_| AtomicUsize::new(0)).collect::<Vec<_>>());
+        let mut pad_voice_producers_vec: Vec<rtrb::Producer<f32>> =
+            Vec::with_capacity(MAX_PAD_VOICES);
+        let sequence_steps = Arc::new(
+            (0..MAX_PAD_VOICES)
+                .map(|_| AtomicUsize::new(0))
+                .collect::<Vec<_>>(),
+        );
 
         for device in &candidates {
-            let name = device.description().ok().map(|d| d.to_string()).unwrap_or_default();
+            let name = device
+                .description()
+                .ok()
+                .map(|d| d.to_string())
+                .unwrap_or_default();
             let configs: Vec<_> = match device.supported_output_configs() {
                 Ok(c) => c.collect(),
                 Err(_) => continue,
             };
-            let picked = configs.iter()
+            let picked = configs
+                .iter()
                 .find(|c| c.channels() >= 2 && c.sample_format() == cpal::SampleFormat::F32)
                 .or_else(|| configs.first());
             let picked = match picked {
@@ -1156,8 +1370,7 @@ impl AudioEngine {
             // Use 48 kHz when available — matches MPV's reliable output rate.
             // Higher rates cause rate mismatch if MPV doesn't honor
             // --audio-samplerate. Fall back to max if 48k isn't in range.
-            let sr: u32 = if picked.min_sample_rate() <= 48000
-                && picked.max_sample_rate() >= 48000
+            let sr: u32 = if picked.min_sample_rate() <= 48000 && picked.max_sample_rate() >= 48000
             {
                 48000
             } else {
@@ -1192,6 +1405,13 @@ impl AudioEngine {
                 last_err = "internal state consumed by previous stream build failure".to_string();
                 continue;
             };
+            let Some(mut mic_cmd_consumer) = mic_cmd_consumer_slot.take() else {
+                ctrl_output_slot = Some(ctrl_output);
+                cmd_consumer_slot = Some(cmd_consumer);
+                last_err =
+                    "internal mic state consumed by previous stream build failure".to_string();
+                continue;
+            };
             // rtrb consumers for FIFO capture — moved into the closure.
             let mut cap_consumers: [Option<rtrb::Consumer<f32>>; 3] = [
                 capture_consumers[0].take(),
@@ -1210,129 +1430,157 @@ impl AudioEngine {
                 DspFilters::new(sr_hz as f32),
                 DspFilters::new(sr_hz as f32),
             ];
-            let mut onset_state: [OnsetState; 3] = [OnsetState::new(), OnsetState::new(), OnsetState::new()];
-            let mut deck_bufs: [Vec<f32>; 3] = [
-                vec![0.0f32; 8192], vec![0.0f32; 8192], vec![0.0f32; 8192],
-            ];
+            let mut onset_state: [OnsetState; 3] =
+                [OnsetState::new(), OnsetState::new(), OnsetState::new()];
+            let mut deck_bufs: [Vec<f32>; 3] =
+                [vec![0.0f32; 8192], vec![0.0f32; 8192], vec![0.0f32; 8192]];
             let mut float_buf: Vec<f32> = vec![0.0f32; 8192];
             let channels = cfg.channels as usize;
 
             // Pad voice ring buffers for this stream attempt
-            let mut pad_voice_consumers_vec: Vec<rtrb::Consumer<f32>> = Vec::with_capacity(MAX_PAD_VOICES);
+            let mut pad_voice_consumers_vec: Vec<rtrb::Consumer<f32>> =
+                Vec::with_capacity(MAX_PAD_VOICES);
             for _ in 0..MAX_PAD_VOICES {
                 let (prod, cons) = RingBuffer::<f32>::new(PAD_RING_SIZE);
                 pad_voice_producers_vec.push(prod);
                 pad_voice_consumers_vec.push(cons);
             }
             let mut pad_voices = PadVoiceState::new(pad_voice_consumers_vec, sr_hz as f32);
+            let mut mic_reader = MicReader::new(sr_hz as f32);
 
             let result = match fmt {
-                cpal::SampleFormat::F32 => {
-                    device.build_output_stream(
-                        &cfg,
-                        move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-                             audio_callback(data, &mut ctrl_output, &mut cmd_consumer,
-                                            &cb_meters_inner, &cb_master_meter_inner,
-                                            &cb_bufs_inner, &mut dsp_state,
-                                            &cb_lfo_debug_inner, &mut deck_bufs,
-                                             &mut cap_consumers,
-                                             &mut capture_lookback,
-                                             &cb_capture_reverse,
-                                             sr_hz as f32,
-                                             &cb_time_pos,
-                                             &cb_duration,
-                                             &cb_seek_requests,
-                                              cb_hp_producer.as_ref(),
-                                              &mut pad_voices,
-                                              &cb_pad_sample_cache,
-                                              &cb_sequence_steps,
-                                              &cb_pad_triggers,
-                                              &mut onset_state,
-                                              &cb_key_sample_tx);
-                        },
-                        rate_limited_err("Audio: "),
-                        None,
-                    )
-                }
-                cpal::SampleFormat::I16 => {
-                    device.build_output_stream(
-                        &cfg,
-                        move |data: &mut [i16], _: &cpal::OutputCallbackInfo| {
-                            let frames = data.len() / channels;
-                            let need = frames * 2;
-                            if float_buf.len() < need { float_buf.resize(need, 0.0); }
-                            let fb = &mut float_buf[..need];
-                             audio_callback(fb, &mut ctrl_output, &mut cmd_consumer,
-                                           &cb_meters_inner, &cb_master_meter_inner,
-                                           &cb_bufs_inner, &mut dsp_state,
-                                           &cb_lfo_debug_inner, &mut deck_bufs,
-                                             &mut cap_consumers,
-                                             &mut capture_lookback,
-                                             &cb_capture_reverse,
-                                             sr_hz as f32,
-                                             &cb_time_pos,
-                                             &cb_duration,
-                                              &cb_seek_requests,
-                                               cb_hp_producer.as_ref(),
-                                              &mut pad_voices,
-                                              &cb_pad_sample_cache,
-                                              &cb_sequence_steps,
-                                              &cb_pad_triggers,
-                                              &mut onset_state,
-                                              &cb_key_sample_tx);
-                            for f in 0..frames {
-                                for ci in 0..channels.min(2) {
-                                    let idx = f * channels + ci;
-                                    data[idx] = (soft_limit(fb[f * 2 + ci]) * 32767.0) as i16;
-                                }
+                cpal::SampleFormat::F32 => device.build_output_stream(
+                    &cfg,
+                    move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+                        audio_callback(
+                            data,
+                            &mut ctrl_output,
+                            &mut cmd_consumer,
+                            &cb_meters_inner,
+                            &cb_master_meter_inner,
+                            &cb_bufs_inner,
+                            &mut dsp_state,
+                            &cb_lfo_debug_inner,
+                            &mut deck_bufs,
+                            &mut cap_consumers,
+                            &mut capture_lookback,
+                            &cb_capture_reverse,
+                            sr_hz as f32,
+                            &cb_time_pos,
+                            &cb_duration,
+                            &cb_seek_requests,
+                            cb_hp_producer.as_ref(),
+                            &mut pad_voices,
+                            &cb_pad_sample_cache,
+                            &cb_sequence_steps,
+                            &cb_pad_triggers,
+                            &mut onset_state,
+                            &cb_key_sample_tx,
+                            &mut mic_cmd_consumer,
+                            &mut mic_reader,
+                        );
+                    },
+                    rate_limited_err("Audio: "),
+                    None,
+                ),
+                cpal::SampleFormat::I16 => device.build_output_stream(
+                    &cfg,
+                    move |data: &mut [i16], _: &cpal::OutputCallbackInfo| {
+                        let frames = data.len() / channels;
+                        let need = frames * 2;
+                        if float_buf.len() < need {
+                            float_buf.resize(need, 0.0);
+                        }
+                        let fb = &mut float_buf[..need];
+                        audio_callback(
+                            fb,
+                            &mut ctrl_output,
+                            &mut cmd_consumer,
+                            &cb_meters_inner,
+                            &cb_master_meter_inner,
+                            &cb_bufs_inner,
+                            &mut dsp_state,
+                            &cb_lfo_debug_inner,
+                            &mut deck_bufs,
+                            &mut cap_consumers,
+                            &mut capture_lookback,
+                            &cb_capture_reverse,
+                            sr_hz as f32,
+                            &cb_time_pos,
+                            &cb_duration,
+                            &cb_seek_requests,
+                            cb_hp_producer.as_ref(),
+                            &mut pad_voices,
+                            &cb_pad_sample_cache,
+                            &cb_sequence_steps,
+                            &cb_pad_triggers,
+                            &mut onset_state,
+                            &cb_key_sample_tx,
+                            &mut mic_cmd_consumer,
+                            &mut mic_reader,
+                        );
+                        for f in 0..frames {
+                            for ci in 0..channels.min(2) {
+                                let idx = f * channels + ci;
+                                data[idx] = (soft_limit(fb[f * 2 + ci]) * 32767.0) as i16;
                             }
-                        },
-                        rate_limited_err("Audio: "),
-                        None,
-                    )
-                }
-                cpal::SampleFormat::I32 => {
-                    device.build_output_stream(
-                        &cfg,
-                        move |data: &mut [i32], _: &cpal::OutputCallbackInfo| {
-                            let frames = data.len() / channels;
-                            let need = frames * 2;
-                            if float_buf.len() < need { float_buf.resize(need, 0.0); }
-                            let fb = &mut float_buf[..need];
-                              audio_callback(fb, &mut ctrl_output, &mut cmd_consumer,
-                                            &cb_meters_inner, &cb_master_meter_inner,
-                                            &cb_bufs_inner, &mut dsp_state,
-                                            &cb_lfo_debug_inner, &mut deck_bufs,
-                                              &mut cap_consumers,
-                                              &mut capture_lookback,
-                                              &cb_capture_reverse,
-                                              sr_hz as f32,
-                                              &cb_time_pos,
-                                              &cb_duration,
-                                               &cb_seek_requests,
-                                                cb_hp_producer.as_ref(),
-                                                &mut pad_voices,
-                                                 &cb_pad_sample_cache,
-                                                 &cb_sequence_steps,
-                                                 &cb_pad_triggers,
-                                                 &mut onset_state,
-                                                 &cb_key_sample_tx);
-                            for f in 0..frames {
-                                for ci in 0..channels.min(2) {
-                                    let idx = f * channels + ci;
-                                    data[idx] = (soft_limit(fb[f * 2 + ci]) * 2147483647.0) as i32;
-                                }
+                        }
+                    },
+                    rate_limited_err("Audio: "),
+                    None,
+                ),
+                cpal::SampleFormat::I32 => device.build_output_stream(
+                    &cfg,
+                    move |data: &mut [i32], _: &cpal::OutputCallbackInfo| {
+                        let frames = data.len() / channels;
+                        let need = frames * 2;
+                        if float_buf.len() < need {
+                            float_buf.resize(need, 0.0);
+                        }
+                        let fb = &mut float_buf[..need];
+                        audio_callback(
+                            fb,
+                            &mut ctrl_output,
+                            &mut cmd_consumer,
+                            &cb_meters_inner,
+                            &cb_master_meter_inner,
+                            &cb_bufs_inner,
+                            &mut dsp_state,
+                            &cb_lfo_debug_inner,
+                            &mut deck_bufs,
+                            &mut cap_consumers,
+                            &mut capture_lookback,
+                            &cb_capture_reverse,
+                            sr_hz as f32,
+                            &cb_time_pos,
+                            &cb_duration,
+                            &cb_seek_requests,
+                            cb_hp_producer.as_ref(),
+                            &mut pad_voices,
+                            &cb_pad_sample_cache,
+                            &cb_sequence_steps,
+                            &cb_pad_triggers,
+                            &mut onset_state,
+                            &cb_key_sample_tx,
+                            &mut mic_cmd_consumer,
+                            &mut mic_reader,
+                        );
+                        for f in 0..frames {
+                            for ci in 0..channels.min(2) {
+                                let idx = f * channels + ci;
+                                data[idx] = (soft_limit(fb[f * 2 + ci]) * 2147483647.0) as i32;
                             }
-                        },
-                        rate_limited_err("Audio: "),
-                        None,
-                    )
-                }
+                        }
+                    },
+                    rate_limited_err("Audio: "),
+                    None,
+                ),
                 other => {
                     last_err = format!("Unsupported format {:?} on {}", other, name);
                     // Return the taken slots so the next device attempt can use them.
                     ctrl_output_slot = Some(ctrl_output);
                     cmd_consumer_slot = Some(cmd_consumer);
+                    mic_cmd_consumer_slot = Some(mic_cmd_consumer);
                     continue;
                 }
             };
@@ -1344,7 +1592,10 @@ impl AudioEngine {
                             stream = Some(s);
                             actual_sr = sr;
                             main_device_name = name.clone();
-                            eprintln!("Audio: streaming on '{}' at {}Hz ch={}", name, sr_hz, cfg.channels);
+                            eprintln!(
+                                "Audio: streaming on '{}' at {}Hz ch={}",
+                                name, sr_hz, cfg.channels
+                            );
                             break;
                         }
                         Err(e) => {
@@ -1371,7 +1622,10 @@ impl AudioEngine {
                     } else {
                         ""
                     };
-                    last_err = format!("Device '{}': build_output_stream failed: {}{}", name, e, hint);
+                    last_err = format!(
+                        "Device '{}': build_output_stream failed: {}{}",
+                        name, e, hint
+                    );
                     eprintln!("Audio: {}", last_err);
                     continue;
                 }
@@ -1386,7 +1640,10 @@ impl AudioEngine {
             } else {
                 ""
             };
-            format!("No working audio device found. Last error: {}{}", last_err, hint)
+            format!(
+                "No working audio device found. Last error: {}{}",
+                last_err, hint
+            )
         })?;
 
         // Try to find a headphone device: prefer a device with a different score
@@ -1401,9 +1658,14 @@ impl AudioEngine {
         // POLLERR spam and no audible output.
         let hp_device = {
             let main_score = score_device(&main_device_name);
-            candidates.iter()
+            candidates
+                .iter()
                 .find(|d| {
-                    let name = d.description().ok().map(|n| n.to_string()).unwrap_or_default();
+                    let name = d
+                        .description()
+                        .ok()
+                        .map(|n| n.to_string())
+                        .unwrap_or_default();
                     let s = score_device(&name);
                     s > 0 && s != main_score
                 })
@@ -1421,17 +1683,17 @@ impl AudioEngine {
                 Ok(c) => c.collect(),
                 Err(_) => vec![],
             };
-            let hp_picked = hp_configs.iter()
+            let hp_picked = hp_configs
+                .iter()
                 .find(|c| c.channels() >= 2 && c.sample_format() == cpal::SampleFormat::F32)
                 .or_else(|| hp_configs.first());
             if let Some(hp_cfg) = hp_picked {
-                let sr: u32 = if hp_cfg.min_sample_rate() <= 48000
-                    && hp_cfg.max_sample_rate() >= 48000
-                {
-                    48000
-                } else {
-                    hp_cfg.max_sample_rate()
-                };
+                let sr: u32 =
+                    if hp_cfg.min_sample_rate() <= 48000 && hp_cfg.max_sample_rate() >= 48000 {
+                        48000
+                    } else {
+                        hp_cfg.max_sample_rate()
+                    };
                 let cfg = (*hp_cfg).with_sample_rate(sr).config();
                 let mut cfg = cfg;
                 cfg.buffer_size = cpal::BufferSize::Fixed(256);
@@ -1476,16 +1738,31 @@ impl AudioEngine {
         }
 
         Ok(Self {
-            state, meters, master_meter, time_pos, duration, lfo_debug,
+            state,
+            meters,
+            master_meter,
+            time_pos,
+            duration,
+            lfo_debug,
             seek_requests,
-            cmd_tx: Mutex::new(cmd_producer), _stream: Some(stream),
-            decoders, captures, bufs, capture_producers, capture_seek_baseline,
-            capture_reverse, device_sr: actual_sr,
+            cmd_tx: Mutex::new(cmd_producer),
+            _stream: Some(stream),
+            mic_stream: Mutex::new(None),
+            mic_cmd_tx: Mutex::new(mic_cmd_producer),
+            selected_mic: Mutex::new(None),
+            decoders,
+            captures,
+            bufs,
+            capture_producers,
+            capture_seek_baseline,
+            capture_reverse,
+            device_sr: actual_sr,
             _headphone_stream: Mutex::new(hp_stream),
             headphone_producer: hp_producer,
             key_sample_tx: key_tx,
             detected_keys,
-            pad_voice_producers: pad_voice_producers_vec.into_iter()
+            pad_voice_producers: pad_voice_producers_vec
+                .into_iter()
                 .map(|p| Mutex::new(Some(p)))
                 .collect(),
             sequence_steps,
@@ -1494,13 +1771,139 @@ impl AudioEngine {
         })
     }
 
+    /// Enumerate microphone inputs. The returned index is stable until the
+    /// system device list changes and is accepted by `select_mic_input`.
+    #[allow(dead_code)]
+    pub fn list_mic_inputs(&self) -> Result<Vec<MicInputDevice>, String> {
+        enumerate_input_devices()
+    }
+
+    /// Open an input device and route it to the main output callback.
+    #[allow(dead_code)]
+    pub fn select_mic_input(&self, device_index: usize) -> Result<(), String> {
+        let devices = input_devices()?;
+        let device = devices
+            .get(device_index)
+            .ok_or_else(|| format!("Microphone input index {device_index} not found"))?;
+        let configs: Vec<_> = device
+            .supported_input_configs()
+            .map_err(|e| format!("Microphone input configs: {e}"))?
+            .filter(|config| {
+                matches!(
+                    config.sample_format(),
+                    cpal::SampleFormat::F32 | cpal::SampleFormat::I16 | cpal::SampleFormat::I32
+                )
+            })
+            .collect();
+        let picked = configs
+            .iter()
+            .find(|config| {
+                config.channels() <= 2 && config.sample_format() == cpal::SampleFormat::F32
+            })
+            .or_else(|| configs.iter().find(|config| config.channels() <= 2))
+            .or_else(|| configs.first())
+            .ok_or_else(|| "Microphone has no supported F32/I16/I32 config".to_string())?;
+        let sample_rate = if picked.min_sample_rate() <= self.device_sr
+            && picked.max_sample_rate() >= self.device_sr
+        {
+            self.device_sr
+        } else {
+            picked.max_sample_rate()
+        };
+        let mut config = (*picked).with_sample_rate(sample_rate).config();
+        config.buffer_size = cpal::BufferSize::Fixed(256);
+        let channels = config.channels as usize;
+        let (producer, consumer) = RingBuffer::<f32>::new(MIC_RING_CAPACITY);
+        let mut producer = producer;
+
+        let stream = match picked.sample_format() {
+            cpal::SampleFormat::F32 => device.build_input_stream(
+                &config,
+                move |data: &[f32], _| {
+                    push_mic_input(data, channels, &mut producer, |sample| sample)
+                },
+                rate_limited_err("Microphone audio: "),
+                None,
+            ),
+            cpal::SampleFormat::I16 => device.build_input_stream(
+                &config,
+                move |data: &[i16], _| {
+                    push_mic_input(data, channels, &mut producer, |sample| {
+                        sample as f32 / 32768.0
+                    })
+                },
+                rate_limited_err("Microphone audio: "),
+                None,
+            ),
+            cpal::SampleFormat::I32 => device.build_input_stream(
+                &config,
+                move |data: &[i32], _| {
+                    push_mic_input(data, channels, &mut producer, |sample| {
+                        sample as f32 / 2147483648.0
+                    })
+                },
+                rate_limited_err("Microphone audio: "),
+                None,
+            ),
+            format => return Err(format!("Unsupported microphone format {format:?}")),
+        }
+        .map_err(|e| format!("Build microphone input stream: {e}"))?;
+
+        stream
+            .play()
+            .map_err(|e| format!("Start microphone input stream: {e}"))?;
+        self.mic_cmd_tx
+            .lock()
+            .map_err(|_| "Microphone command lock poisoned".to_string())?
+            .push(MicCommand::Replace {
+                consumer,
+                sample_rate,
+            })
+            .map_err(|_| "Microphone command queue full".to_string())?;
+        *self
+            .mic_stream
+            .lock()
+            .map_err(|_| "Microphone stream lock poisoned".to_string())? = Some(stream);
+        *self
+            .selected_mic
+            .lock()
+            .map_err(|_| "Microphone selection lock poisoned".to_string())? = Some(device_index);
+        Ok(())
+    }
+
+    #[allow(dead_code)]
+    pub fn selected_mic_input(&self) -> Option<usize> {
+        self.selected_mic.lock().ok().and_then(|selected| *selected)
+    }
+
+    #[allow(dead_code)]
+    pub fn set_mic_gain(&self, gain: f32) {
+        self.state.set_mic_gain(gain);
+    }
+
+    #[allow(dead_code)]
+    pub fn set_mic_muted(&self, muted: bool) {
+        self.state.set_mic_muted(muted);
+    }
+
     /// Load a file for a deck: creates a decoder thread and wires the ring buffer.
     /// I/O happens on the calling thread (UI thread) — do not call from audio callback.
     pub fn load_file(&self, ch: usize, path: String) {
-        if ch >= MAX_DECKS { return; }
+        self.load_file_at(ch, path, 0.0);
+    }
+
+    /// Load a file and begin decoding at the requested playback position.
+    pub fn load_file_at(&self, ch: usize, path: String, position: f64) {
+        if ch >= MAX_DECKS {
+            return;
+        }
         match DecoderThread::load(Path::new(&path)) {
             Ok(decoder) => {
-                self.time_pos[ch].store(0.0);
+                let position = position.max(0.0);
+                if position > 0.0 {
+                    decoder.seek_to(position);
+                }
+                self.time_pos[ch].store(position);
                 self.duration[ch].store(decoder.duration_secs);
                 self.seek_requests[ch].store(SEEK_SENTINEL);
                 self.bufs[ch].set(Arc::clone(&decoder.ring));
@@ -1523,9 +1926,9 @@ impl AudioEngine {
                 return;
             }
         };
-        let target = devices.iter().find(|d| {
-            d.description().ok().map(|n| n.to_string()).as_deref() == Some(device_name)
-        });
+        let target = devices
+            .iter()
+            .find(|d| d.description().ok().map(|n| n.to_string()).as_deref() == Some(device_name));
         let target = match target {
             Some(d) => d,
             None => {
@@ -1541,19 +1944,21 @@ impl AudioEngine {
                 return;
             }
         };
-        let picked = configs.iter()
+        let picked = configs
+            .iter()
             .find(|c| c.channels() >= 2 && c.sample_format() == cpal::SampleFormat::F32)
             .or_else(|| configs.first());
         let picked = match picked {
             Some(p) => p,
             None => {
-                eprintln!("Audio: headphone device '{}' has no F32 config", device_name);
+                eprintln!(
+                    "Audio: headphone device '{}' has no F32 config",
+                    device_name
+                );
                 return;
             }
         };
-        let sr: u32 = if picked.min_sample_rate() <= 48000
-            && picked.max_sample_rate() >= 48000
-        {
+        let sr: u32 = if picked.min_sample_rate() <= 48000 && picked.max_sample_rate() >= 48000 {
             48000
         } else {
             picked.max_sample_rate()
@@ -1613,7 +2018,10 @@ impl AudioEngine {
         }
 
         // Take the rtrb producer for this deck — pipe thread needs ownership.
-        let producer = self.capture_producers[ch].lock().unwrap().take()
+        let producer = self.capture_producers[ch]
+            .lock()
+            .unwrap()
+            .take()
             .ok_or_else(|| format!("capture producer for ch {} already taken", ch))?;
 
         match PipeCaptureThread::open_with_producer(path, producer) {
@@ -1640,20 +2048,21 @@ impl AudioEngine {
         }
         let reverse = delta_secs < 0.0;
         if let Ok(guard) = self.decoders[ch].lock()
-            && let Some(decoder) = guard.as_ref() {
-                decoder.set_reverse_scrub(reverse);
-                let mut target = self.time_pos[ch].load() + delta_secs;
-                let dur = self.duration[ch].load();
-                if dur > 0.0 {
-                    target = target.clamp(0.0, dur);
-                } else {
-                    target = target.max(0.0);
-                }
-                decoder.seek_to(target);
-                self.time_pos[ch].store(target);
-                self.seek_requests[ch].store(target);
-                return;
+            && let Some(decoder) = guard.as_ref()
+        {
+            decoder.set_reverse_scrub(reverse);
+            let mut target = self.time_pos[ch].load() + delta_secs;
+            let dur = self.duration[ch].load();
+            if dur > 0.0 {
+                target = target.clamp(0.0, dur);
+            } else {
+                target = target.max(0.0);
             }
+            decoder.seek_to(target);
+            self.time_pos[ch].store(target);
+            self.seek_requests[ch].store(target);
+            return;
+        }
 
         if self.has_capture(ch) {
             self.capture_reverse[ch].set_active(reverse);
@@ -1681,7 +2090,8 @@ impl AudioEngine {
 
     /// Whether a deck is currently receiving PCM from an MPV FIFO capture.
     pub fn has_capture(&self, ch: usize) -> bool {
-        self.captures.get(ch)
+        self.captures
+            .get(ch)
             .map(|m| m.lock().unwrap().is_some())
             .unwrap_or(false)
     }
@@ -1689,10 +2099,25 @@ impl AudioEngine {
     /// Whether a given deck has a decoder OR capture active (i.e. audio
     /// flowing through engine — MPV af LPF/HPF should be skipped in this case).
     pub fn has_decoder(&self, ch: usize) -> bool {
-        let has_dec = self.decoders.get(ch)
+        let has_dec = self
+            .decoders
+            .get(ch)
             .map(|m| m.lock().unwrap().is_some())
             .unwrap_or(false);
         has_dec || self.has_capture(ch)
+    }
+
+    pub fn decoder_is_eof(&self, ch: usize) -> bool {
+        self.decoders
+            .get(ch)
+            .and_then(|m| m.lock().ok())
+            .and_then(|guard| guard.as_ref().map(|d| d.is_eof()))
+            .unwrap_or(false)
+    }
+
+    /// Whether the deck's ring buffer has data remaining (decoder still feeding).
+    pub fn buffer_has_data(&self, ch: usize) -> bool {
+        self.bufs.get(ch).map(|b| b.has_data()).unwrap_or(false)
     }
 
     /// Stop decoder for a deck (drops the decoder thread, clears ring buffer).
@@ -1735,7 +2160,10 @@ impl AudioEngine {
             if slot.is_none() {
                 *slot = Some(prod);
             } else {
-                eprintln!("Audio: capture producer already present for ch={}, dropping reclaimed producer", ch);
+                eprintln!(
+                    "Audio: capture producer already present for ch={}, dropping reclaimed producer",
+                    ch
+                );
             }
         } else {
             eprintln!("Audio: failed to reclaim capture producer for ch={}", ch);
@@ -1761,32 +2189,40 @@ impl AudioEngine {
     /// Store cached sample data for a pad. Called from UI thread when a sample
     /// is assigned to a pad. The audio callback reads this when a sequencer
     /// step triggers.
-    pub fn set_pad_sample(&self, pad_idx: usize, samples: Vec<f32>, sample_rate: u32, channels: u16) {
+    pub fn set_pad_sample(
+        &self,
+        pad_idx: usize,
+        samples: Vec<f32>,
+        sample_rate: u32,
+        channels: u16,
+    ) {
         if let Ok(mut cache) = self.pad_sample_cache.write()
-            && pad_idx < cache.len() {
-                // Ensure samples are always stereo interleaved for the voice mixer.
-                // Mono files get each sample duplicated to L/R.
-                let stereo_samples = if channels == 1 {
-                    let mut out = Vec::with_capacity(samples.len() * 2);
-                    for &s in &samples {
-                        out.push(s);
-                        out.push(s);
-                    }
-                    out
-                } else {
-                    samples
-                };
-                cache[pad_idx] = Some(Arc::new((stereo_samples, sample_rate)));
-            }
+            && pad_idx < cache.len()
+        {
+            // Ensure samples are always stereo interleaved for the voice mixer.
+            // Mono files get each sample duplicated to L/R.
+            let stereo_samples = if channels == 1 {
+                let mut out = Vec::with_capacity(samples.len() * 2);
+                for &s in &samples {
+                    out.push(s);
+                    out.push(s);
+                }
+                out
+            } else {
+                samples
+            };
+            cache[pad_idx] = Some(Arc::new((stereo_samples, sample_rate)));
+        }
     }
 
     /// Clear cached sample data for a pad.
     #[allow(dead_code)]
     pub fn clear_pad_sample(&self, pad_idx: usize) {
         if let Ok(mut cache) = self.pad_sample_cache.write()
-            && pad_idx < cache.len() {
-                cache[pad_idx] = None;
-            }
+            && pad_idx < cache.len()
+        {
+            cache[pad_idx] = None;
+        }
     }
 
     /// Publish sequence state from UI to audio thread via the control snapshot.
@@ -1796,7 +2232,8 @@ impl AudioEngine {
 
     /// Read the current step per sequence (set by the audio callback).
     pub fn read_sequence_steps(&self) -> Vec<usize> {
-        self.sequence_steps.iter()
+        self.sequence_steps
+            .iter()
             .map(|a| a.load(Ordering::Relaxed))
             .collect()
     }
@@ -1812,6 +2249,33 @@ impl Drop for AudioEngine {
     }
 }
 
+#[allow(dead_code)]
+fn stereo_input_frame<T: Copy>(frame: &[T], convert: impl Fn(T) -> f32) -> [f32; 2] {
+    let left = frame.first().copied().map(&convert).unwrap_or(0.0);
+    let right = frame.get(1).copied().map(convert).unwrap_or(left);
+    [left, right]
+}
+
+#[allow(dead_code)]
+fn push_mic_input<T: Copy>(
+    data: &[T],
+    channels: usize,
+    producer: &mut Producer<f32>,
+    convert: impl Fn(T) -> f32 + Copy,
+) {
+    if channels == 0 {
+        return;
+    }
+    for frame in data.chunks_exact(channels) {
+        if producer.slots() < 2 {
+            break;
+        }
+        let [left, right] = stereo_input_frame(frame, convert);
+        let _ = producer.push(left);
+        let _ = producer.push(right);
+    }
+}
+
 /// Volume boost applied to Deck C headphone output to compensate for
 /// headphone output being quieter than the main speakers. Multiplied
 /// on top of the fader, master, and system volume.
@@ -1821,11 +2285,7 @@ const DECK_C_VOLUME_OFFSET: f32 = 6.0;
 /// and writes to the headphone cpal stream. Outputs silence when buffer empty.
 /// Applies macOS system output volume so Deck C scales with the same slider
 /// that controls Decks A/B on the speakers.
-fn headphone_callback(
-    data: &mut [f32],
-    consumer: &mut rtrb::Consumer<f32>,
-    channels: usize,
-) {
+fn headphone_callback(data: &mut [f32], consumer: &mut rtrb::Consumer<f32>, channels: usize) {
     let sys_vol: f32 = if cfg!(target_os = "macos") {
         #[cfg(target_os = "macos")]
         {
@@ -1834,15 +2294,20 @@ fn headphone_callback(
             static LOG_COUNTER: AtomicU64 = AtomicU64::new(0);
             let c = LOG_COUNTER.fetch_add(1, Ordering::Relaxed);
             if (c < 5 || c % 2000 == 0)
-                && let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true)
-                    .open("/tmp/termixer_hp_debug.log") {
-                    use std::io::Write;
-                    let _ = writeln!(f, "hp cb#{}: sys_vol={:?}", c, v);
-                }
+                && let Ok(mut f) = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open("/tmp/termixer_hp_debug.log")
+            {
+                use std::io::Write;
+                let _ = writeln!(f, "hp cb#{}: sys_vol={:?}", c, v);
+            }
             v.unwrap_or(1.0)
         }
         #[cfg(not(target_os = "macos"))]
-        { 1.0 }
+        {
+            1.0
+        }
     } else {
         1.0
     };
@@ -1852,35 +2317,48 @@ fn headphone_callback(
     let stereo_samples = available / 2;
     let to_read = frames.min(stereo_samples);
     if to_read > 0
-        && let Ok(chunk) = consumer.read_chunk(to_read * 2) {
-            let (first, second) = chunk.as_slices();
-            let mut written = 0;
-            for sample_pair in first.chunks(2) {
-                if written >= frames { break; }
-                let l = soft_limit(sample_pair.first().copied().unwrap_or(0.0) * sys_vol * DECK_C_VOLUME_OFFSET);
-                let r = soft_limit(sample_pair.get(1).copied().unwrap_or(l) * sys_vol * DECK_C_VOLUME_OFFSET);
-                for ci in 0..channels.min(2) {
-                    data[written * channels + ci] = if ci == 0 { l } else { r };
-                }
-                for ci in 2..channels {
-                    data[written * channels + ci] = 0.0;
-                }
-                written += 1;
+        && let Ok(chunk) = consumer.read_chunk(to_read * 2)
+    {
+        let (first, second) = chunk.as_slices();
+        let mut written = 0;
+        for sample_pair in first.chunks(2) {
+            if written >= frames {
+                break;
             }
-            for sample_pair in second.chunks(2) {
-                if written >= frames { break; }
-                let l = soft_limit(sample_pair.first().copied().unwrap_or(0.0) * sys_vol * DECK_C_VOLUME_OFFSET);
-                let r = soft_limit(sample_pair.get(1).copied().unwrap_or(l) * sys_vol * DECK_C_VOLUME_OFFSET);
-                for ci in 0..channels.min(2) {
-                    data[written * channels + ci] = if ci == 0 { l } else { r };
-                }
-                for ci in 2..channels {
-                    data[written * channels + ci] = 0.0;
-                }
-                written += 1;
+            let l = soft_limit(
+                sample_pair.first().copied().unwrap_or(0.0) * sys_vol * DECK_C_VOLUME_OFFSET,
+            );
+            let r = soft_limit(
+                sample_pair.get(1).copied().unwrap_or(l) * sys_vol * DECK_C_VOLUME_OFFSET,
+            );
+            for ci in 0..channels.min(2) {
+                data[written * channels + ci] = if ci == 0 { l } else { r };
             }
-            chunk.commit_all();
+            for ci in 2..channels {
+                data[written * channels + ci] = 0.0;
+            }
+            written += 1;
         }
+        for sample_pair in second.chunks(2) {
+            if written >= frames {
+                break;
+            }
+            let l = soft_limit(
+                sample_pair.first().copied().unwrap_or(0.0) * sys_vol * DECK_C_VOLUME_OFFSET,
+            );
+            let r = soft_limit(
+                sample_pair.get(1).copied().unwrap_or(l) * sys_vol * DECK_C_VOLUME_OFFSET,
+            );
+            for ci in 0..channels.min(2) {
+                data[written * channels + ci] = if ci == 0 { l } else { r };
+            }
+            for ci in 2..channels {
+                data[written * channels + ci] = 0.0;
+            }
+            written += 1;
+        }
+        chunk.commit_all();
+    }
     let written_frames = to_read;
     for f in written_frames..frames {
         for c in 0..channels {
@@ -1933,7 +2411,11 @@ impl<T: Copy, const N: usize> RingBuf<T, N> {
         for slot in buf.iter_mut() {
             *slot = MaybeUninit::new(init);
         }
-        Self { buf, head: 0, len: 0 }
+        Self {
+            buf,
+            head: 0,
+            len: 0,
+        }
     }
 
     fn push(&mut self, val: T) {
@@ -2010,15 +2492,26 @@ fn audio_callback(
     pad_triggers: &[AtomicBool],
     onset_state: &mut [OnsetState; 3],
     key_sample_tx: &std::sync::mpsc::Sender<(usize, Vec<f32>, u32)>,
+    mic_cmd_consumer: &mut Consumer<MicCommand>,
+    mic_reader: &mut MicReader,
 ) {
     // Drain pending commands (lockfree SPSC pop).
     while let Ok(cmd) = cmd_consumer.pop() {
         match cmd {
             AudioCommand::Stop(ch) => {
-                if ch < MAX_DECKS { bufs[ch].clear(); }
+                if ch < MAX_DECKS {
+                    bufs[ch].clear();
+                }
             }
             AudioCommand::Quit => return,
         }
+    }
+    while let Ok(MicCommand::Replace {
+        consumer,
+        sample_rate,
+    }) = mic_cmd_consumer.pop()
+    {
+        mic_reader.replace(consumer, sample_rate);
     }
 
     // Lockfree snapshot read — triple-buffered, always latest.
@@ -2049,9 +2542,10 @@ fn audio_callback(
             if let Some(ref mut consumer) = cap_consumers[d] {
                 let queued = consumer.slots();
                 if queued > 0
-                    && let Ok(chunk) = consumer.read_chunk(queued) {
-                        chunk.commit_all();
-                    }
+                    && let Ok(chunk) = consumer.read_chunk(queued)
+                {
+                    chunk.commit_all();
+                }
                 dsp_state[d].prev_l = 0.0;
                 dsp_state[d].prev_r = 0.0;
                 dsp_state[d].underrun_gain = 0.0;
@@ -2072,6 +2566,11 @@ fn audio_callback(
     let need = frames * 2;
     let mut deck_reads: [usize; 3] = [0; 3];
     let mut deck_has_any_data: [bool; 3] = [false; 3];
+    let deck_is_active: [bool; 3] = [
+        bufs[0].is_active() || cap_consumers[0].is_some(),
+        bufs[1].is_active() || cap_consumers[1].is_some(),
+        bufs[2].is_active() || cap_consumers[2].is_some(),
+    ];
     for d in 0..3 {
         if capture_reverse[d].is_active() {
             let out = &mut deck_bufs[d][..need];
@@ -2125,7 +2624,11 @@ fn audio_callback(
     // The audio callback owns pad_triggers; UI sets pad_triggers[i] = true.
     // Always activate a voice on trigger — the voice mixing section handles
     // cache lookup and won't produce audio if sample data isn't loaded.
-    for (i, trigger) in pad_triggers.iter().enumerate().take(pad_voices.voice_active.len()) {
+    for (i, trigger) in pad_triggers
+        .iter()
+        .enumerate()
+        .take(pad_voices.voice_active.len())
+    {
         if trigger.swap(false, Ordering::Relaxed) {
             // Find a free voice slot
             for v in 0..pad_voices.voice_active.len() {
@@ -2150,7 +2653,11 @@ fn audio_callback(
     let global_pos = GLOBAL_SAMPLE_POS.load(Ordering::Relaxed);
 
     // Master clock: global_bpm from the first sequence
-    let global_bpm = ctrl.sequences.first().map(|s| s.global_bpm).unwrap_or(120.0);
+    let global_bpm = ctrl
+        .sequences
+        .first()
+        .map(|s| s.global_bpm)
+        .unwrap_or(120.0);
     let global_step_interval = (60.0 / global_bpm.clamp(20.0, 400.0) / 4.0) * sample_rate;
 
     // Current global step position (which 16th note are we on?)
@@ -2170,14 +2677,38 @@ fn audio_callback(
 
     // Per-sequence previous step tracking (for per-sequence tempo)
     static LAST_SEQ_STEPS: [AtomicU64; 32] = [
-        AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
-        AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
-        AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
-        AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
-        AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
-        AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
-        AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
-        AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
     ];
 
     // Try to lock pad sample cache (non-blocking — skip if contended)
@@ -2222,22 +2753,23 @@ fn audio_callback(
 
         // If the triggered step is active in the pattern, start playback
         if seq.pattern[step]
-            && let Some(cache) = cache_ref {
-                let pad_idx = seq.pad_idx;
-                if pad_idx < cache.len() && cache[pad_idx].is_some() {
-                    // Find a free voice slot
-                    for v in 0..pad_voices.voice_active.len() {
-                        if !pad_voices.voice_active[v] {
-                            pad_voices.voice_active[v] = true;
-                            pad_voices.voice_position[v] = 0;
-                            pad_voices.voice_pad_idx[v] = pad_idx;
-                            pad_voices.voice_gain[v] = 0.0;
-                            pad_voices.voice_seq_idx[v] = seq_idx;
-                            break;
-                        }
+            && let Some(cache) = cache_ref
+        {
+            let pad_idx = seq.pad_idx;
+            if pad_idx < cache.len() && cache[pad_idx].is_some() {
+                // Find a free voice slot
+                for v in 0..pad_voices.voice_active.len() {
+                    if !pad_voices.voice_active[v] {
+                        pad_voices.voice_active[v] = true;
+                        pad_voices.voice_position[v] = 0;
+                        pad_voices.voice_pad_idx[v] = pad_idx;
+                        pad_voices.voice_gain[v] = 0.0;
+                        pad_voices.voice_seq_idx[v] = seq_idx;
+                        break;
                     }
                 }
             }
+        }
 
         // Publish step to UI via atomic
         if let Some(atomic) = sequence_steps.get(seq_idx) {
@@ -2255,8 +2787,8 @@ fn audio_callback(
         let mut mix_l = 0.0;
         let mut mix_r = 0.0;
 
-    #[allow(clippy::needless_range_loop)]
-    for d in 0..3 {
+        #[allow(clippy::needless_range_loop)]
+        for d in 0..3 {
             let cd = &ctrl.decks[d];
             let n = deck_reads[d];
 
@@ -2292,7 +2824,13 @@ fn audio_callback(
             let (lg, rg) = pan_gains(cd.pan);
 
             let ch_active = if solo_active { cd.solo } else { !cd.muted };
-            let cf_gain = if d == 1 { gain_b } else if d == 2 { 1.0 } else { gain_a };
+            let cf_gain = if d == 1 {
+                gain_b
+            } else if d == 2 {
+                1.0
+            } else {
+                gain_a
+            };
             let vol = if ch_active && cd.playing && !ctrl.master.muted {
                 // 4× makeup gain compensates for the multiplicative chain:
                 // fader(0.5) × crossfader(0.707) × master(0.5) × pan(0.707) = 0.125
@@ -2314,10 +2852,11 @@ fn audio_callback(
             // Deck C (d==2) routes to headphone output instead of main mix
             if d == 2 {
                 if let Ok(mut guard) = hp_producer.try_lock()
-                    && let Some(ref mut prod) = *guard {
-                        let _ = prod.push(l);
-                        let _ = prod.push(r);
-                    }
+                    && let Some(ref mut prod) = *guard
+                {
+                    let _ = prod.push(l);
+                    let _ = prod.push(r);
+                }
             } else {
                 mix_l += l;
                 mix_r += r;
@@ -2331,7 +2870,9 @@ fn audio_callback(
 
         if let Some(cache) = cache_ref {
             for v in 0..pad_voices.voice_active.len() {
-                if !pad_voices.voice_active[v] { continue; }
+                if !pad_voices.voice_active[v] {
+                    continue;
+                }
                 let pos = pad_voices.voice_position[v];
                 let pad_idx = pad_voices.voice_pad_idx[v];
                 if pad_idx < cache.len() {
@@ -2342,23 +2883,25 @@ fn audio_callback(
                         let adjusted_pos = (pos as f32 * sample_rate_ratio) as usize;
                         let stereo_pos = adjusted_pos * 2;
                         if stereo_pos + 1 < samples.len() {
-                            let (seq_vol, pad_vol) =
-                                if pad_voices.voice_seq_idx[v] == usize::MAX {
-                                    // Direct trigger: skip mute check, use full volume
-                                    (1.0, 1.0)
-                                } else {
-                                    let seq = ctrl.sequences.get(pad_voices.voice_seq_idx[v]);
-                                    // Check if sequence is muted — kill voice if so
-                                    if seq.map(|s| s.mute).unwrap_or(false) {
-                                        pad_voices.voice_active[v] = false;
-                                        continue;
-                                    }
-                                    (seq.map(|s| s.volume).unwrap_or(1.0),
-                                     seq.map(|s| s.pad_volume).unwrap_or(1.0))
-                                };
+                            let (seq_vol, pad_vol) = if pad_voices.voice_seq_idx[v] == usize::MAX {
+                                // Direct trigger: skip mute check, use full volume
+                                (1.0, 1.0)
+                            } else {
+                                let seq = ctrl.sequences.get(pad_voices.voice_seq_idx[v]);
+                                // Check if sequence is muted — kill voice if so
+                                if seq.map(|s| s.mute).unwrap_or(false) {
+                                    pad_voices.voice_active[v] = false;
+                                    continue;
+                                }
+                                (
+                                    seq.map(|s| s.volume).unwrap_or(1.0),
+                                    seq.map(|s| s.pad_volume).unwrap_or(1.0),
+                                )
+                            };
                             // Envelope: linear attack over ATTACK_SAMPLES
                             let gain = if pad_voices.voice_gain[v] < 1.0 {
-                                pad_voices.voice_gain[v] = (pad_voices.voice_gain[v] + 1.0 / ATTACK_SAMPLES).min(1.0);
+                                pad_voices.voice_gain[v] =
+                                    (pad_voices.voice_gain[v] + 1.0 / ATTACK_SAMPLES).min(1.0);
                                 pad_voices.voice_gain[v]
                             } else {
                                 1.0
@@ -2388,6 +2931,12 @@ fn audio_callback(
         mix_l += pad_mix_l;
         mix_r += pad_mix_r;
 
+        let mic = mic_reader.next_frame();
+        if !ctrl.mic.muted && !ctrl.master.muted {
+            mix_l += mic[0] * ctrl.mic.gain;
+            mix_r += mic[1] * ctrl.mic.gain;
+        }
+
         ml.push_stereo(mix_l, mix_r);
         data[f * 2] = soft_limit(mix_l);
         data[f * 2 + 1] = soft_limit(mix_r);
@@ -2396,12 +2945,16 @@ fn audio_callback(
     for d in 0..3 {
         let (pl, pr, rl, rr) = dm[d].read();
         meters[d].store(pl, pr, rl, rr);
-        if deck_has_any_data[d] && ctrl.decks[d].playing {
+        if deck_is_active[d] && ctrl.decks[d].playing {
             let delta = (frames as f64) / (sample_rate as f64);
             let rate = ctrl.decks[d].playback_rate.clamp(0.1, 4.0) as f64;
             let dur = duration[d].load();
             let stepped = time_pos[d].load() + delta * rate;
-            let bounded = if dur > 0.0 { stepped.min(dur) } else { stepped.max(0.0) };
+            let bounded = if dur > 0.0 {
+                stepped.min(dur)
+            } else {
+                stepped.max(0.0)
+            };
             time_pos[d].store(bounded);
 
             // Onset detection for capture channels (~10Hz, every ~10 buffers at 48kHz/256)
@@ -2416,7 +2969,11 @@ fn audio_callback(
                     sum_sq += v * v;
                     count += 1;
                 }
-                let rms = if count > 0 { (sum_sq / count as f32).sqrt() } else { 0.0 };
+                let rms = if count > 0 {
+                    (sum_sq / count as f32).sqrt()
+                } else {
+                    0.0
+                };
 
                 let energy = rms;
                 onset_state[d].energy_ring.push(energy);
@@ -2424,7 +2981,8 @@ fn audio_callback(
                 if onset_state[d].energy_ring.len() >= 20 {
                     let ring = &onset_state[d].energy_ring;
                     let mean: f32 = ring.iter().sum::<f32>() / ring.len() as f32;
-                    let var: f32 = ring.iter().map(|e| (e - mean).powi(2)).sum::<f32>() / ring.len() as f32;
+                    let var: f32 =
+                        ring.iter().map(|e| (e - mean).powi(2)).sum::<f32>() / ring.len() as f32;
                     let threshold = mean + 1.2 * var.sqrt();
 
                     let now = Instant::now();
@@ -2438,7 +2996,8 @@ fn audio_callback(
                             // Stack-allocated IOI buffer (max 31 intervals from 32 onsets)
                             let mut iois = [0.0f32; 31];
                             let mut ioi_count = 0;
-                            let times: Vec<Instant> = onset_state[d].onset_times.iter().copied().collect();
+                            let times: Vec<Instant> =
+                                onset_state[d].onset_times.iter().copied().collect();
                             for pair in times.windows(2) {
                                 let ioi = pair[1].duration_since(pair[0]).as_millis() as f32;
                                 if (250.0..=1000.0).contains(&ioi) && ioi_count < iois.len() {
@@ -2488,13 +3047,50 @@ fn audio_callback(
     static DBG_FRAME: AtomicU64 = AtomicU64::new(0);
     let frame_count = DBG_FRAME.fetch_add(1, Ordering::Relaxed);
     if frame_count % 50 == 0
-        && let Ok(mut s) = lfo_debug.try_lock() {
-            s.clear();
-            for (di, deck_dsp) in dsp_state.iter().enumerate() {
-                if di > 0 { s.push(' '); }
-                let dl = deck_dsp.lfo_debug_line();
-                let ss = ctrl.decks[di].lfo_speed;
-                s.push_str(&format!("[{}]{} ss={:.3}", di, dl, ss));
+        && let Ok(mut s) = lfo_debug.try_lock()
+    {
+        s.clear();
+        for (di, deck_dsp) in dsp_state.iter().enumerate() {
+            if di > 0 {
+                s.push(' ');
             }
+            let dl = deck_dsp.lfo_debug_line();
+            let ss = ctrl.decks[di].lfo_speed;
+            s.push_str(&format!("[{}]{} ss={:.3}", di, dl, ss));
         }
+    }
+}
+
+#[cfg(test)]
+mod mic_tests {
+    use super::*;
+
+    #[test]
+    fn maps_mono_and_stereo_input() {
+        assert_eq!(stereo_input_frame(&[0.25], |sample| sample), [0.25, 0.25]);
+        assert_eq!(
+            stereo_input_frame(&[0.25, -0.5], |sample| sample),
+            [0.25, -0.5]
+        );
+        assert_eq!(
+            stereo_input_frame(&[16384i16], |sample| sample as f32 / 32768.0),
+            [0.5, 0.5]
+        );
+    }
+
+    #[test]
+    fn interpolates_rate_mismatch_without_allocating() {
+        let (mut producer, consumer) = RingBuffer::<f32>::new(MIC_RING_CAPACITY);
+        for sample in [0.0, 0.0, 1.0, 1.0, 2.0, 2.0, 3.0, 3.0] {
+            producer.push(sample).unwrap();
+        }
+        let mut reader = MicReader::new(4.0);
+        reader.replace(consumer, 2);
+
+        let first = reader.next_frame();
+        let second = reader.next_frame();
+        assert_eq!(first, [0.0, 0.0]);
+        assert!((second[0] - 0.499).abs() < 0.01);
+        assert_eq!(second[0], second[1]);
+    }
 }
