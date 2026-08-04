@@ -13,7 +13,7 @@ use ratatui::{
 
 use crate::app::{
     AddSourceTab, ConfirmAction, Deck, MixerLayout, OutputPickerTarget, PickerInputMode,
-    SelectedPane, SourcePickerState, SourcePickerTab,
+    SelectedPane, SessionPickerState, SourcePickerState, SourcePickerTab,
 };
 use crate::state::{
     ChannelControl, EditTarget, GlobalControl, GlobalSequenceControl, MixerState, PAD_KEYS,
@@ -60,6 +60,7 @@ pub struct MixerView<'a> {
     confirm_selected: bool,
     help_scroll: usize,
     deck_queue_indices: &'a [usize; 3],
+    session_picker: Option<&'a SessionPickerState>,
 }
 
 impl<'a> MixerView<'a> {
@@ -99,6 +100,7 @@ impl<'a> MixerView<'a> {
             confirm_selected: false,
             help_scroll: 0,
             deck_queue_indices: &[0, 0, 0],
+            session_picker: None,
         }
     }
 
@@ -212,6 +214,11 @@ impl<'a> MixerView<'a> {
         self
     }
 
+    pub fn session_picker(mut self, picker: &'a SessionPickerState) -> Self {
+        self.session_picker = Some(picker);
+        self
+    }
+
     pub fn help_scroll(mut self, offset: usize) -> Self {
         self.help_scroll = offset;
         self
@@ -302,6 +309,11 @@ impl<'a> Widget for MixerView<'a> {
         // Render confirm dialog overlay if active
         if let Some(action) = self.confirm_action {
             self.render_confirm_dialog(main_area, buf, action);
+        }
+
+        // Render session picker dialog overlay if active
+        if let Some(picker) = self.session_picker {
+            self.render_session_picker(main_area, buf, picker);
         }
 
         // Render debug log if present
@@ -1554,7 +1566,7 @@ impl<'a> MixerView<'a> {
             } else if item.is_udp {
                 "◉ "
             } else {
-                "♪ "
+                "\u{f001} "
             };
             let line = format!("{}{}", icon, item.name);
 
@@ -1619,6 +1631,8 @@ impl<'a> MixerView<'a> {
                 let is_selected = i == picker.selected && picker.selected < picker.filtered.len();
                 let style = if is_selected {
                     Style::default().fg(Color::Black).bg(BORDER_ACTIVE)
+                } else if item.is_dir {
+                    Style::default().fg(DECK_A)
                 } else {
                     Style::default().fg(TEXT_BRIGHT)
                 };
@@ -1627,13 +1641,13 @@ impl<'a> MixerView<'a> {
                 }
 
                 let icon = if item.is_dir {
-                    "📁"
+                    "\u{f07b}"
                 } else if item.is_socket || item.is_pcm_fifo {
-                    ""
+                    ""
                 } else if item.is_udp {
                     "◉ "
                 } else {
-                    "♪ "
+                    "\u{f001} "
                 };
                 let line = format!("{} {}", icon, item.name);
 
@@ -1726,12 +1740,22 @@ impl<'a> MixerView<'a> {
                 Style::default().fg(Color::Black).bg(STATUS_PLAYING),
             ),
         };
-        let search_text = format!(" > {}_", picker.add_query);
-        let search_line = Line::from(vec![
-            mode_label,
-            Span::raw(" "),
-            Span::styled(&search_text, Style::default().fg(TEXT_BRIGHT)),
-        ]);
+        let search_style = Style::default().fg(TEXT_BRIGHT);
+        let mut search_spans = vec![mode_label];
+        match picker.add_input_mode {
+            PickerInputMode::Normal if !picker.add_query.is_empty() => {
+                search_spans.push(Span::styled(format!("  {}", picker.add_query), search_style));
+            }
+            PickerInputMode::Insert => {
+                search_spans.push(Span::styled(format!("  > {}", picker.add_query), search_style));
+                search_spans.push(Span::styled(
+                    if (self.elapsed_ms / 500).is_multiple_of(2) { "_" } else { " " },
+                    search_style,
+                ));
+            }
+            _ => {}
+        }
+        let search_line = Line::from(search_spans);
         buf.set_line(chunks[1].x, chunks[1].y, &search_line, chunks[1].width);
 
         // File list
@@ -1751,23 +1775,26 @@ impl<'a> MixerView<'a> {
                     break;
                 }
 
-                let is_selected = i == picker.add_selected
+                let is_cursor = i == picker.add_selected
                     && picker.add_selected < picker.add_filtered.len()
                     && !picker.tab_focused;
-                let style = if is_selected {
+                let is_marked = picker.add_marked.contains(&item.path);
+                let style = if is_cursor || is_marked {
                     Style::default().fg(Color::Black).bg(BORDER_ACTIVE)
+                } else if item.is_dir {
+                    Style::default().fg(DECK_A)
                 } else {
                     Style::default().fg(TEXT_BRIGHT)
                 };
 
                 let icon = if item.is_dir {
-                    "📁"
+                    "\u{f07b}"
                 } else if item.is_socket || item.is_pcm_fifo {
-                    ""
+                    ""
                 } else if item.is_udp {
                     "◉ "
                 } else {
-                    "♪ "
+                    "\u{f001} "
                 };
                 let line = format!("{} {}", icon, item.name);
 
@@ -1792,7 +1819,9 @@ impl<'a> MixerView<'a> {
 
         // Hint line
         let hint = match picker.add_input_mode {
-            PickerInputMode::Normal => "i:insert  j/k:nav  h/l:tabs  Enter:add  Esc:back",
+            PickerInputMode::Normal => {
+                "i:insert  j/k:nav  Shift+j/k:select  Enter:add  Esc:back"
+            }
             PickerInputMode::Insert => "Esc:normal  Tab:switch  Enter:add  Type to filter",
         };
         buf.set_string(
@@ -1879,12 +1908,22 @@ impl<'a> MixerView<'a> {
                 Style::default().fg(Color::Black).bg(STATUS_PLAYING),
             ),
         };
-        let search_text = format!(" > {}_", picker.query);
-        let search_line = Line::from(vec![
-            mode_label,
-            Span::raw(" "),
-            Span::styled(&search_text, Style::default().fg(TEXT_BRIGHT)),
-        ]);
+        let search_style = Style::default().fg(TEXT_BRIGHT);
+        let mut search_spans = vec![mode_label];
+        match picker.input_mode {
+            PickerInputMode::Normal if !picker.query.is_empty() => {
+                search_spans.push(Span::styled(format!("  {}", picker.query), search_style));
+            }
+            PickerInputMode::Insert => {
+                search_spans.push(Span::styled(format!("  > {}", picker.query), search_style));
+                search_spans.push(Span::styled(
+                    if (self.elapsed_ms / 500).is_multiple_of(2) { "_" } else { " " },
+                    search_style,
+                ));
+            }
+            _ => {}
+        }
+        let search_line = Line::from(search_spans);
         buf.set_line(chunks[1].x, chunks[1].y, &search_line, chunks[1].width);
 
         // File list
@@ -2197,5 +2236,346 @@ impl<'a> MixerView<'a> {
             Span::styled("n", n_style),
         ]));
         hint.render(chunks[3], buf);
+    }
+
+    fn render_session_picker(&self, area: Rect, buf: &mut Buffer, picker: &SessionPickerState) {
+        // Centered popup
+        let popup_width = 60u16.min(area.width.saturating_sub(4));
+        let popup_height = 22u16.min(area.height.saturating_sub(4));
+        let popup_x = area.x + (area.width.saturating_sub(popup_width)) / 2;
+        let popup_y = area.y + (area.height.saturating_sub(popup_height)) / 2;
+        let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
+
+        // Clear background
+        Clear.render(popup_area, buf);
+        for y in popup_area.y..popup_area.y + popup_area.height {
+            for x in popup_area.x..popup_area.x + popup_area.width {
+                buf.set_string(x, y, " ", Style::default().bg(BG_POPUP));
+            }
+        }
+
+        let title = if picker.is_save {
+            " SAVE "
+        } else {
+            " LOAD "
+        };
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(BORDER_ACTIVE))
+            .title(Span::styled(
+                title,
+                Style::default()
+                    .fg(BORDER_ACTIVE)
+                    .add_modifier(Modifier::BOLD),
+            ));
+
+        let inner = block.inner(popup_area);
+        block.render(popup_area, buf);
+
+        // Overwrite confirmation overlay
+        if let Some(ref path) = picker.overwrite_confirm {
+            let filename = path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "file".to_string());
+            let msg = format!("Overwrite {}?", filename);
+
+            let confirm_width = (msg.len() as u16 + 8).min(popup_width.saturating_sub(4));
+            let confirm_height = 5u16;
+            let confirm_x = inner.x + (inner.width.saturating_sub(confirm_width)) / 2;
+            let confirm_y = inner.y + (inner.height.saturating_sub(confirm_height)) / 2;
+            let confirm_area = Rect::new(confirm_x, confirm_y, confirm_width, confirm_height);
+
+            Clear.render(confirm_area, buf);
+            for y in confirm_area.y..confirm_area.y + confirm_area.height {
+                for x in confirm_area.x..confirm_area.x + confirm_area.width {
+                    buf.set_string(x, y, " ", Style::default().bg(BG_POPUP));
+                }
+            }
+
+            let confirm_block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(TEXT_EDITING))
+                .title(Span::styled(
+                    " OVERWRITE ",
+                    Style::default()
+                        .fg(TEXT_EDITING)
+                        .add_modifier(Modifier::BOLD),
+                ));
+
+            let confirm_inner = confirm_block.inner(confirm_area);
+            confirm_block.render(confirm_area, buf);
+
+            let confirm_chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(1),
+                    Constraint::Length(1),
+                    Constraint::Length(1),
+                ])
+                .split(confirm_inner);
+
+            buf.set_string(
+                confirm_chunks[0].x,
+                confirm_chunks[0].y,
+                &msg,
+                Style::default().fg(TEXT_BRIGHT),
+            );
+
+            let hint = Line::from(vec![
+                Span::styled("Y", Style::default().fg(TEXT_BRIGHT).add_modifier(Modifier::BOLD)),
+                Span::styled(":yes  ", Style::default().fg(TEXT_DIM)),
+                Span::styled("n", Style::default().fg(TEXT_BRIGHT).add_modifier(Modifier::BOLD)),
+                Span::styled(":no", Style::default().fg(TEXT_DIM)),
+            ]);
+            let hint_para = Paragraph::new(hint);
+            hint_para.render(confirm_chunks[2], buf);
+            return;
+        }
+
+        // Layout: save name (save mode) / search, file list, hint
+        let constraints = if picker.is_save {
+            vec![
+                Constraint::Length(4), // Input field + helper row
+                Constraint::Length(1), // Search input
+                Constraint::Min(5),    // File list
+                Constraint::Length(1), // Hint
+            ]
+        } else {
+            vec![
+                Constraint::Length(1), // Search input
+                Constraint::Min(5),    // File list
+                Constraint::Length(1), // Hint
+            ]
+        };
+
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints(constraints)
+            .split(inner);
+
+        // --- Save name row (sticky at top, save mode only) ---
+        if picker.is_save {
+            let save_area = chunks[0];
+            let is_editing = picker.selected == 0 && picker.editing_save_name;
+            let is_focused = picker.selected == 0;
+
+            // Input field with border, 1 cell padding on each side
+            let field_x = save_area.x + 1;
+            let field_y = save_area.y;
+            let field_w = save_area.width.saturating_sub(2);
+            let border_color = if is_focused { BORDER_ACTIVE } else { TEXT_DIM };
+
+            // Top border: ┌─...─┐
+            let mut top = String::from("┌");
+            top.push_str(&"─".repeat((field_w as usize).saturating_sub(2)));
+            top.push('┐');
+            buf.set_string(
+                field_x,
+                field_y,
+                &top,
+                Style::default().fg(border_color),
+            );
+
+            // Middle: │ <value> │
+            let inner_w = (field_w as usize).saturating_sub(2);
+            let value_w = inner_w.saturating_sub(2);
+            let truncated: String = picker.save_name.chars().take(value_w).collect();
+            let pad_style = if is_focused {
+                Style::default().fg(TEXT_EDITING).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(TEXT_DEFAULT)
+            };
+            let value_style = if is_editing {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(TEXT_EDITING)
+                    .add_modifier(Modifier::BOLD)
+            } else if is_focused {
+                Style::default()
+                    .fg(TEXT_EDITING)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(TEXT_DEFAULT)
+            };
+            let base_x = field_x + 1;
+            buf.set_string(field_x, field_y + 1, "│", Style::default().fg(border_color));
+            buf.set_string(base_x, field_y + 1, " ", pad_style);
+            buf.set_string(base_x + 1, field_y + 1, &truncated, value_style);
+            let pad_r_x =
+                base_x + 1 + unicode_width::UnicodeWidthStr::width(truncated.as_str()) as u16;
+            if pad_r_x < field_x + field_w - 1 {
+                buf.set_string(pad_r_x, field_y + 1, " ", pad_style);
+            }
+            if is_editing && (self.elapsed_ms / 500).is_multiple_of(2) {
+                let cursor = picker.save_name_cursor.min(picker.save_name.len());
+                if let Some(prefix) = picker.save_name.get(..cursor) {
+                    let cursor_offset = unicode_width::UnicodeWidthStr::width(prefix);
+                    if cursor_offset < value_w {
+                        buf.set_style(
+                            Rect::new(base_x + 1 + cursor_offset as u16, field_y + 1, 1, 1),
+                            value_style.add_modifier(Modifier::UNDERLINED),
+                        );
+                    }
+                }
+            }
+            buf.set_string(
+                field_x + field_w - 1,
+                field_y + 1,
+                "│",
+                Style::default().fg(border_color),
+            );
+
+            // Bottom border: └─...─┘
+            let mut bot = String::from("└");
+            bot.push_str(&"─".repeat((field_w as usize).saturating_sub(2)));
+            bot.push('┘');
+            buf.set_string(
+                field_x,
+                field_y + 2,
+                &bot,
+                Style::default().fg(border_color),
+            );
+
+            if let Some(ref msg) = picker.status_message {
+                let message = msg.replace(".json", "\".json\"");
+                let message_width = unicode_width::UnicodeWidthStr::width(message.as_str()) as u16;
+                let message_x = (field_x + field_w).saturating_sub(message_width);
+                buf.set_stringn(
+                    message_x,
+                    field_y + 3,
+                    message,
+                    message_width as usize,
+                    Style::default().fg(STATUS_MUTED),
+                );
+            }
+        }
+
+        // --- Search input row ---
+        let search_idx = if picker.is_save { 1 } else { 0 };
+        let search_area = chunks[search_idx];
+        let save_name_has_focus = picker.is_save && picker.selected == 0;
+
+        let mode_label = match picker.input_mode {
+            PickerInputMode::Normal => {
+                Span::styled(" NOR ", Style::default().fg(Color::Black).bg(TEXT_DEFAULT))
+            }
+            PickerInputMode::Insert => Span::styled(
+                " INS ",
+                Style::default().fg(Color::Black).bg(STATUS_PLAYING),
+            ),
+        };
+
+        let search_style = if save_name_has_focus
+            && picker.input_mode == PickerInputMode::Normal
+        {
+            Style::default().fg(TEXT_DIM)
+        } else {
+            Style::default().fg(TEXT_BRIGHT)
+        };
+
+        let mut search_spans = vec![mode_label];
+        match picker.input_mode {
+            PickerInputMode::Normal if !picker.query.is_empty() => {
+                search_spans.push(Span::styled(format!("  {}", picker.query), search_style));
+            }
+            PickerInputMode::Insert => {
+                search_spans.push(Span::styled(format!("  > {}", picker.query), search_style));
+                search_spans.push(Span::styled(
+                    if (self.elapsed_ms / 500).is_multiple_of(2) { "_" } else { " " },
+                    search_style,
+                ));
+            }
+            _ => {}
+        }
+        let search_line = Line::from(search_spans);
+        buf.set_line(search_area.x, search_area.y, &search_line, search_area.width);
+
+        // --- File list ---
+        let list_idx = if picker.is_save { 2 } else { 1 };
+        let list_area = chunks[list_idx];
+        let visible_items = list_area.height as usize;
+
+        for (i, &item_idx) in picker
+            .filtered
+            .iter()
+            .enumerate()
+            .skip(picker.scroll_offset)
+            .take(visible_items)
+        {
+            if let Some(item) = picker.items.get(item_idx) {
+                let y = list_area.y + i as u16 - picker.scroll_offset as u16;
+                if y >= list_area.y + list_area.height {
+                    break;
+                }
+
+                // In save mode, selected=0 is save name, selected=1.. maps to filtered indices
+                let is_selected = if picker.is_save {
+                    picker.selected > 0 && i + 1 == picker.selected
+                } else {
+                    i == picker.selected && picker.selected < picker.filtered.len()
+                };
+                let style = if is_selected {
+                    Style::default().fg(Color::Black).bg(BORDER_ACTIVE)
+                } else if item.is_dir {
+                    Style::default().fg(DECK_A)
+                } else {
+                    Style::default().fg(TEXT_BRIGHT)
+                };
+
+                let icon = if item.is_dir { "\u{f07b} " } else { "\u{e60b} " };
+                let line = format!("{}{}", icon, item.name);
+
+                let usable_width = list_area.width as usize;
+                let truncated_name = if line.len() > usable_width {
+                    let truncated: String =
+                        line.chars().take(usable_width.saturating_sub(1)).collect();
+                    format!("{}…", truncated)
+                } else {
+                    format!("{:width$}", line, width = usable_width)
+                };
+
+                buf.set_stringn(
+                    list_area.x,
+                    y,
+                    &truncated_name,
+                    list_area.width as usize,
+                    style,
+                );
+            }
+        }
+
+        // --- Hint line ---
+        let hint_idx = if picker.is_save { 3 } else { 2 };
+        let hint = if picker.is_save {
+            if picker.selected == 0 {
+                if picker.editing_save_name {
+                    "Enter:save  Esc:back to nav  Backspace:delete"
+                } else {
+                    "j/k:nav  Enter:edit/save  Esc:cancel"
+                }
+            } else {
+                match picker.input_mode {
+                    PickerInputMode::Normal => {
+                        "j/k:nav  h/l:dirs  i:filter  Enter:open  Esc:cancel"
+                    }
+                    PickerInputMode::Insert => "Esc:normal  j/k:nav  Enter:open  Type to filter",
+                }
+            }
+        } else {
+            match picker.input_mode {
+                PickerInputMode::Normal => {
+                    "j/k:nav  h/l:dirs  i:filter  Enter:load  Esc:cancel"
+                }
+                PickerInputMode::Insert => "Esc:normal  j/k:nav  Enter:load  Type to filter",
+            }
+        };
+        buf.set_string(
+            chunks[hint_idx].x,
+            chunks[hint_idx].y,
+            hint,
+            Style::default().fg(TEXT_GHOST),
+        );
     }
 }

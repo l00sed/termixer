@@ -577,8 +577,13 @@ impl<'a> Widget for SequenceRow<'a> {
 
         let sep_x = area.x + name.len() as u16;
 
-        // Vertical separator after name
-        buf.set_string(sep_x, y, "│", Style::default().fg(self.border_color));
+        // Vertical separator after name — only highlight when this row is selected
+        let sep_color = if self.selected {
+            self.border_color
+        } else {
+            Color::DarkGray
+        };
+        buf.set_string(sep_x, y, "│", Style::default().fg(sep_color));
 
         // --- Right-aligned controls: mute + gear ---
         let gear_is_target = self.selected && self.cursor == EditTarget::Gear;

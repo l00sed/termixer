@@ -1,7 +1,7 @@
 //! Application state and event handling
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
@@ -86,6 +86,8 @@ pub enum AppMode {
     ConfirmAction(ConfirmAction),
     /// Config file update check dialog
     ConfigCheck,
+    /// Session file picker for save/load
+    SessionPicker,
 }
 
 /// Actions that require confirmation
@@ -127,6 +129,236 @@ pub struct QueueItem {
     pub is_udp: bool,
 }
 
+/// Session file picker state
+#[derive(Debug, Clone)]
+pub struct SessionPickerState {
+    pub input_mode: PickerInputMode,
+    pub query: String,
+    pub items: Vec<SessionPickerItem>,
+    pub filtered: Vec<usize>,
+    pub selected: usize,
+    pub scroll_offset: usize,
+    pub current_dir: PathBuf,
+    pub root_dir: PathBuf,
+    pub visible_height: usize,
+    pub is_save: bool,
+    pub save_name: String,
+    /// Cursor position within save_name when editing.
+    pub save_name_cursor: usize,
+    /// When selected == 0 and this is true, keystrokes edit save_name.
+    /// Enter toggles this; j/k only work when false.
+    pub editing_save_name: bool,
+    /// When Some, shows an overwrite confirmation dialog for this path.
+    pub overwrite_confirm: Option<PathBuf>,
+    /// Status message displayed below the save name row (e.g., validation errors).
+    pub status_message: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SessionPickerItem {
+    pub name: String,
+    pub path: PathBuf,
+    pub is_dir: bool,
+}
+
+impl SessionPickerState {
+    pub fn new() -> Self {
+        Self {
+            input_mode: PickerInputMode::Normal,
+            query: String::new(),
+            items: Vec::new(),
+            filtered: Vec::new(),
+            selected: 0,
+            scroll_offset: 0,
+            current_dir: PathBuf::new(),
+            root_dir: PathBuf::new(),
+            visible_height: 12,
+            is_save: true,
+            save_name: "session.json".to_string(),
+            save_name_cursor: 0,
+            editing_save_name: false,
+            overwrite_confirm: None,
+            status_message: None,
+        }
+    }
+
+    pub fn set_root(&mut self, root: PathBuf) {
+        self.root_dir = root.clone();
+        self.current_dir = root;
+    }
+
+    pub fn filter(&mut self) {
+        let query_lower = self.query.to_lowercase();
+        self.filtered = self
+            .items
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| {
+                if query_lower.is_empty() {
+                    true
+                } else {
+                    item.name.to_lowercase().contains(&query_lower)
+                }
+            })
+            .map(|(i, _)| i)
+            .collect();
+        self.selected = 0;
+        self.scroll_offset = 0;
+    }
+
+    pub fn scan_dir(&mut self) {
+        self.items.clear();
+
+        let can_go_up = self.current_dir != self.root_dir
+            && self.current_dir.parent().is_some();
+        if can_go_up {
+            self.items.push(SessionPickerItem {
+                name: "..".to_string(),
+                path: self
+                    .current_dir
+                    .parent()
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(|| self.root_dir.clone()),
+                is_dir: true,
+            });
+        }
+
+        let mut dirs = Vec::new();
+        let mut files = Vec::new();
+
+        if let Ok(entries) = std::fs::read_dir(&self.current_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default();
+
+                if name.starts_with('.') {
+                    continue;
+                }
+
+                if path.is_dir() {
+                    dirs.push(SessionPickerItem {
+                        name: format!("{}/", name),
+                        path,
+                        is_dir: true,
+                    });
+                } else if path.is_file() {
+                    let ext_lower = path
+                        .extension()
+                        .map(|e| e.to_string_lossy().to_lowercase())
+                        .unwrap_or_default();
+                    if ext_lower == "json" {
+                        files.push(SessionPickerItem {
+                            name,
+                            path,
+                            is_dir: false,
+                        });
+                    }
+                }
+            }
+        }
+
+        dirs.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        files.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+
+        self.items.extend(dirs);
+        self.items.extend(files);
+        self.filter();
+    }
+
+    pub fn move_up(&mut self) {
+        if self.is_save && self.selected == 0 {
+            // Wrap from save name row to last item in file list
+            if !self.filtered.is_empty() {
+                self.selected = self.filtered.len();
+                let file_idx = self.selected.saturating_sub(1);
+                if file_idx >= self.scroll_offset + self.visible_height {
+                    self.scroll_offset = file_idx.saturating_sub(self.visible_height - 1);
+                }
+            }
+            return;
+        }
+        if self.selected == 0 {
+            if !self.is_save && !self.filtered.is_empty() {
+                // Round-robin: wrap from top to last item
+                self.selected = self.filtered.len().saturating_sub(1);
+                let file_idx = self.selected;
+                if file_idx >= self.scroll_offset + self.visible_height {
+                    self.scroll_offset = file_idx.saturating_sub(self.visible_height - 1);
+                }
+            }
+            return;
+        }
+        self.selected -= 1;
+        if self.selected > 0 && self.selected - 1 < self.scroll_offset {
+            self.scroll_offset = self.selected - 1;
+        } else if self.selected == 0 && self.is_save {
+            self.scroll_offset = 0;
+        }
+    }
+
+    pub fn move_down(&mut self) {
+        let max = if self.is_save {
+            self.filtered.len() // 0=save name, 1..=len=file items
+        } else {
+            self.filtered.len().saturating_sub(1)
+        };
+        if self.selected >= max {
+            if self.is_save {
+                // Wrap from bottom of file list back to save name row
+                self.selected = 0;
+                self.scroll_offset = 0;
+            } else if !self.filtered.is_empty() {
+                // Round-robin: wrap from bottom to top
+                self.selected = 0;
+                self.scroll_offset = 0;
+            }
+            return;
+        }
+        self.selected += 1;
+        self.editing_save_name = false;
+        // scroll_offset indexes into the file list (items 1.. in save mode)
+        let file_idx = if self.is_save {
+            self.selected.saturating_sub(1)
+        } else {
+            self.selected
+        };
+        if file_idx >= self.scroll_offset + self.visible_height {
+            self.scroll_offset = file_idx.saturating_sub(self.visible_height - 1);
+        }
+    }
+
+    pub fn enter_dir(&mut self) -> bool {
+        let file_idx = if self.is_save {
+            self.selected.saturating_sub(1)
+        } else {
+            self.selected
+        };
+        if let Some(&idx) = self.filtered.get(file_idx)
+            && let Some(item) = self.items.get(idx)
+            && item.is_dir
+        {
+            self.current_dir = item.path.clone();
+            self.query.clear();
+            self.input_mode = PickerInputMode::Normal;
+            self.scan_dir();
+            return true;
+        }
+        false
+    }
+
+    pub fn go_up(&mut self) {
+        if self.current_dir != self.root_dir
+            && let Some(parent) = self.current_dir.parent()
+        {
+            self.current_dir = parent.to_path_buf();
+            self.scan_dir();
+        }
+    }
+}
+
 /// Source picker state
 #[derive(Debug, Clone)]
 pub struct SourcePickerState {
@@ -157,6 +389,10 @@ pub struct SourcePickerState {
     pub add_filtered: Vec<usize>,
     /// Sub-view selected index
     pub add_selected: usize,
+    /// Paths highlighted for batch addition to the queue.
+    pub add_marked: HashSet<PathBuf>,
+    /// Starting row for a Shift+navigation range selection.
+    pub add_selection_anchor: Option<usize>,
     /// Sub-view scroll offset
     pub add_scroll_offset: usize,
     /// Sub-view query for filtering
@@ -206,6 +442,8 @@ impl SourcePickerState {
             add_items: Vec::new(),
             add_filtered: Vec::new(),
             add_selected: 0,
+            add_marked: HashSet::new(),
+            add_selection_anchor: None,
             add_scroll_offset: 0,
             add_query: String::new(),
             add_input_mode: PickerInputMode::Normal,
@@ -326,6 +564,56 @@ impl SourcePickerState {
         }
     }
 
+    pub fn add_extend_selection(&mut self, down: bool) {
+        if self.add_filtered.is_empty() {
+            return;
+        }
+
+        if self.add_selected >= self.add_filtered.len() {
+            self.add_selected = if down { 0 } else { self.add_filtered.len() - 1 };
+            self.add_selection_anchor = Some(self.add_selected);
+            if let Some(item) = self
+                .add_filtered
+                .get(self.add_selected)
+                .and_then(|&item_idx| self.add_items.get(item_idx))
+                && !item.is_dir
+            {
+                self.add_marked.insert(item.path.clone());
+            }
+            return;
+        }
+        let anchor = *self.add_selection_anchor.get_or_insert(self.add_selected);
+
+        if down {
+            if self.add_selected + 1 < self.add_filtered.len() {
+                self.add_selected += 1;
+            }
+        } else if self.add_selected > 0 {
+            self.add_selected -= 1;
+        }
+
+        self.add_marked.clear();
+        let start = anchor.min(self.add_selected);
+        let end = anchor.max(self.add_selected);
+        for filtered_idx in start..=end {
+            if let Some(item) = self
+                .add_filtered
+                .get(filtered_idx)
+                .and_then(|&item_idx| self.add_items.get(item_idx))
+                && !item.is_dir
+            {
+                self.add_marked.insert(item.path.clone());
+            }
+        }
+        if self.add_selected < self.add_scroll_offset {
+            self.add_scroll_offset = self.add_selected;
+        } else if self.add_selected >= self.add_scroll_offset + self.visible_height {
+            self.add_scroll_offset = self
+                .add_selected
+                .saturating_sub(self.visible_height.saturating_sub(1));
+        }
+    }
+
     pub fn add_clamp_scroll(&mut self) {
         if self.visible_height == 0 {
             return;
@@ -340,6 +628,8 @@ impl SourcePickerState {
     }
 
     pub fn add_next_tab(&mut self) {
+        self.add_marked.clear();
+        self.add_selection_anchor = None;
         self.add_tab = match self.add_tab {
             AddSourceTab::MpvSockets => AddSourceTab::AudioFiles,
             AddSourceTab::AudioFiles => AddSourceTab::MpvSockets,
@@ -348,6 +638,8 @@ impl SourcePickerState {
     }
 
     pub fn add_prev_tab(&mut self) {
+        self.add_marked.clear();
+        self.add_selection_anchor = None;
         self.add_tab = match self.add_tab {
             AddSourceTab::MpvSockets => AddSourceTab::AudioFiles,
             AddSourceTab::AudioFiles => AddSourceTab::MpvSockets,
@@ -445,6 +737,7 @@ impl SourcePickerState {
 
 #[cfg(test)]
 mod source_picker_tests {
+    use std::collections::HashSet;
     use std::path::PathBuf;
 
     use crate::state::Sequence;
@@ -452,7 +745,7 @@ mod source_picker_tests {
 
     use super::{
         App, AppMode, ConfirmAction, Deck, GlobalControl, QueueItem, SelectedPane, SelectionFocus,
-        SourcePickerState, queue_nav_available,
+        SourcePickerItem, SourcePickerState, queue_nav_available,
     };
 
     fn queue_item(name: &str) -> QueueItem {
@@ -463,6 +756,39 @@ mod source_picker_tests {
             is_pcm_fifo: false,
             is_udp: false,
         }
+    }
+
+    fn source_item(name: &str) -> SourcePickerItem {
+        SourcePickerItem {
+            name: name.to_string(),
+            path: PathBuf::from(format!("/{name}.wav")),
+            is_socket: false,
+            is_pcm_fifo: false,
+            is_udp: false,
+            is_dir: false,
+        }
+    }
+
+    #[test]
+    fn shifted_navigation_extends_add_source_selection() {
+        let mut picker = SourcePickerState::new();
+        picker.add_items = vec![source_item("one"), source_item("two"), source_item("three")];
+        picker.add_filter();
+
+        picker.add_extend_selection(true);
+        assert_eq!(picker.add_selected, 0);
+        assert_eq!(picker.add_marked, HashSet::from([PathBuf::from("/one.wav")]));
+
+        picker.add_extend_selection(true);
+        assert_eq!(picker.add_selected, 1);
+        assert_eq!(
+            picker.add_marked,
+            HashSet::from([PathBuf::from("/one.wav"), PathBuf::from("/two.wav")])
+        );
+
+        picker.add_extend_selection(false);
+        assert_eq!(picker.add_selected, 0);
+        assert_eq!(picker.add_marked, HashSet::from([PathBuf::from("/one.wav")]));
     }
 
     #[test]
@@ -1045,6 +1371,9 @@ pub struct App {
     last_detected_keys: [Option<String>; 3],
     // Track-end detection: was the engine playing on the previous tick?
     engine_was_playing: [bool; 3],
+    // Session picker state (for save/load without native dialogs)
+    pub session_picker: SessionPickerState,
+    pub sessions_dir: PathBuf,
 }
 
 /// Which output device picker is active
@@ -2046,6 +2375,11 @@ impl App {
             })
             .unwrap_or_else(|_| cwd.clone());
 
+        // Default session directory: ~/Documents
+        let default_session_dir = std::env::var("HOME")
+            .map(|home| PathBuf::from(home).join("Documents"))
+            .unwrap_or_else(|_| cwd.clone());
+
         // Initialize sample engine for instant playback
         let sample_engine = SampleEngine::new().ok();
 
@@ -2143,6 +2477,8 @@ impl App {
             pending_bpm: Arc::new(Mutex::new(Vec::new())),
             last_detected_keys: [None, None, None],
             engine_was_playing: [false; 3],
+            session_picker: SessionPickerState::new(),
+            sessions_dir: default_session_dir,
         }
     }
 
@@ -2152,6 +2488,10 @@ impl App {
 
     pub fn set_samples_dir(&mut self, dir: PathBuf) {
         self.samples_dir = dir;
+    }
+
+    pub fn set_session_dir(&mut self, dir: PathBuf) {
+        self.sessions_dir = dir;
     }
 
     /// Configure audio sources from socket paths
@@ -3217,6 +3557,18 @@ impl App {
 
     /// Handle keyboard input
     pub fn handle_key(&mut self, key: KeyEvent) {
+        // Insert-mode text input takes precedence over global shortcuts.
+        if matches!(self.mode, AppMode::SourcePicker(_))
+            && if self.source_picker.adding_to_queue {
+                self.source_picker.add_input_mode == PickerInputMode::Insert
+            } else {
+                self.source_picker.input_mode == PickerInputMode::Insert
+            }
+        {
+            self.handle_source_picker_key(key);
+            return;
+        }
+
         // Global shortcuts available from any mode
         match key.code {
             // Confirm quit from anywhere
@@ -3373,6 +3725,7 @@ impl App {
             AppMode::SamplePicker(_) => self.handle_sample_picker_key(key),
             AppMode::ConfirmAction(action) => self.handle_confirm_key(key, action),
             AppMode::ConfigCheck => self.handle_config_check_key(key),
+            AppMode::SessionPicker => self.handle_session_picker_key(key),
         }
     }
 
@@ -3440,108 +3793,412 @@ impl App {
         }
     }
 
-    /// Open native save dialog and persist session state
-    fn save_session(&mut self) {
-        let dialog = rfd::FileDialog::new()
-            .set_title("Save Session")
-            .add_filter("JSON", &["json"])
-            .set_file_name("session.json");
+    /// Handle session picker key events
+    fn handle_session_picker_key(&mut self, key: KeyEvent) {
+        let is_save = self.session_picker.is_save;
 
-        if let Some(path) = dialog.save_file() {
-            let session = SessionState::from_current(&self.sample_pads.pads, &self.sequence_state);
-            if let Err(e) = session.save_to_file(&path) {
-                self.log_debug(format!("Save failed: {}", e));
+        if is_save {
+            self.handle_session_picker_key_save(key);
+        } else {
+            self.handle_session_picker_key_load(key);
+        }
+    }
+
+    /// Save mode: "Save as:" row is index 0, file list items are 1+.
+    ///
+    /// selected=0          → save name row focused, typing edits, Enter saves
+    /// selected=1..        → file list navigation, Enter opens dir / triggers overwrite
+    /// overwrite_confirm   → overwrite confirmation dialog, y/n/Esc
+    fn handle_session_picker_key_save(&mut self, key: KeyEvent) {
+        // Overwrite confirmation takes priority
+        if let Some(ref path) = self.session_picker.overwrite_confirm.clone() {
+            match key.code {
+                KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
+                    let path = path.clone();
+                    self.session_picker.overwrite_confirm = None;
+                    self.save_session_to_path(&path);
+                    self.focus_sequences_global();
+                }
+                KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') => {
+                    self.session_picker.overwrite_confirm = None;
+                }
+                _ => {}
+            }
+            return;
+        }
+
+        if self.session_picker.selected == 0 && self.session_picker.input_mode == PickerInputMode::Normal {
+            // Save name row (only in Normal mode; Insert mode with selected==0 stays in file list)
+            if self.session_picker.editing_save_name {
+                // Editing mode: type to edit save name
+                match key.code {
+                    KeyCode::Esc => {
+                        self.session_picker.editing_save_name = false;
+                    }
+                    KeyCode::Left => {
+                        let mut cur = self.session_picker.save_name_cursor.saturating_sub(1);
+                        while !self.session_picker.save_name.is_char_boundary(cur) {
+                            cur -= 1;
+                        }
+                        self.session_picker.save_name_cursor = cur;
+                    }
+                    KeyCode::Right => {
+                        let mut cur = self.session_picker.save_name_cursor;
+                        if cur < self.session_picker.save_name.len() {
+                            cur += 1;
+                            while !self.session_picker.save_name.is_char_boundary(cur) {
+                                cur += 1;
+                            }
+                            self.session_picker.save_name_cursor = cur;
+                        }
+                    }
+                    KeyCode::Enter => {
+                        let save_name = self.session_picker.save_name.clone();
+                        if !save_name.ends_with(".json") {
+                            self.session_picker.status_message =
+                                Some("Filename must end with .json".to_string());
+                            return;
+                        }
+                        if save_name
+                            .strip_suffix(".json")
+                            .is_none_or(|name| name.trim().is_empty())
+                        {
+                            self.session_picker.status_message =
+                                Some("Filename must include a name".to_string());
+                            return;
+                        }
+                        let current_dir = self.session_picker.current_dir.clone();
+                        let path = current_dir.join(&save_name);
+                        self.session_picker.status_message = None;
+                        if path.exists() {
+                            self.session_picker.overwrite_confirm = Some(path);
+                        } else {
+                            self.save_session_to_path(&path);
+                            self.focus_sequences_global();
+                        }
+                    }
+                    KeyCode::Backspace => {
+                        let cur = self.session_picker.save_name_cursor;
+                        if cur > 0 {
+                            let mut previous = cur - 1;
+                            while !self.session_picker.save_name.is_char_boundary(previous) {
+                                previous -= 1;
+                            }
+                            self.session_picker.save_name.drain(previous..cur);
+                            self.session_picker.save_name_cursor = previous;
+                        }
+                    }
+                    KeyCode::Char(c) => {
+                        self.session_picker.status_message = None;
+                        let cur = self.session_picker.save_name_cursor;
+                        self.session_picker.save_name.insert(cur, c);
+                        self.session_picker.save_name_cursor += c.len_utf8();
+                    }
+                    _ => {}
+                }
             } else {
-                self.log_debug(format!("Session saved to {}", path.display()));
+                // Normal mode on save name row: navigate or toggle editing
+                match key.code {
+                    KeyCode::Esc | KeyCode::Char('q') => {
+                        self.focus_sequences_global();
+                    }
+                    KeyCode::Enter => {
+                        self.session_picker.save_name_cursor = self.session_picker.save_name.len();
+                        self.session_picker.editing_save_name = true;
+                    }
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        self.session_picker.move_down();
+                    }
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        self.session_picker.move_up();
+                    }
+                    KeyCode::Char('i') => {
+                        self.session_picker.input_mode = PickerInputMode::Insert;
+                    }
+                    _ => {}
+                }
+            }
+        } else {
+            // File list zone
+            match self.session_picker.input_mode {
+                PickerInputMode::Normal => match key.code {
+                    KeyCode::Esc | KeyCode::Char('q') => {
+                        self.focus_sequences_global();
+                    }
+                    KeyCode::Char('j') | KeyCode::Down => {
+                        self.session_picker.move_down();
+                    }
+                    KeyCode::Char('k') | KeyCode::Up => {
+                        self.session_picker.move_up();
+                    }
+                    KeyCode::Char('l') | KeyCode::Right => {
+                        self.session_picker.enter_dir();
+                    }
+                    KeyCode::Enter => {
+                        // selected >= 1, so file_idx = selected - 1
+                        let file_idx = self.session_picker.selected - 1;
+                        if let Some(&idx) = self.session_picker.filtered.get(file_idx)
+                            && let Some(item) = self.session_picker.items.get(idx)
+                        {
+                            if item.is_dir {
+                                self.session_picker.enter_dir();
+                                self.session_picker.selected = 0;
+                            } else if item.path.extension().is_some_and(|e| e == "json") {
+                                self.session_picker.save_name = item
+                                    .path
+                                    .file_name()
+                                    .map(|n| n.to_string_lossy().to_string())
+                                    .unwrap_or_else(|| "session.json".to_string());
+                                self.session_picker.overwrite_confirm = Some(item.path.clone());
+                            }
+                        }
+                    }
+                    KeyCode::Char('h') | KeyCode::Left | KeyCode::Backspace => {
+                        self.session_picker.go_up();
+                    }
+                    KeyCode::Char('i') => {
+                        self.session_picker.input_mode = PickerInputMode::Insert;
+                    }
+                    KeyCode::Char('g') => {
+                        self.session_picker.selected = 0;
+                        self.session_picker.scroll_offset = 0;
+                    }
+                    KeyCode::Char('G') => {
+                        let max = self.session_picker.filtered.len(); // 0=save, 1..=len=file
+                        self.session_picker.selected = max;
+                        let file_idx = max.saturating_sub(1);
+                        if file_idx >= self.session_picker.scroll_offset + self.session_picker.visible_height {
+                            self.session_picker.scroll_offset =
+                                file_idx.saturating_sub(self.session_picker.visible_height - 1);
+                        }
+                    }
+                    _ => {}
+                },
+                PickerInputMode::Insert => match key.code {
+                    KeyCode::Esc => {
+                        self.session_picker.input_mode = PickerInputMode::Normal;
+                    }
+                    KeyCode::Backspace => {
+                        self.session_picker.query.pop();
+                        self.session_picker.filter();
+                    }
+                    KeyCode::Enter => {
+                        self.session_picker.input_mode = PickerInputMode::Normal;
+                    }
+                    KeyCode::Down => {
+                        self.session_picker.move_down();
+                    }
+                    KeyCode::Up => {
+                        self.session_picker.move_up();
+                    }
+                    KeyCode::Char(c) => {
+                        self.session_picker.query.push(c);
+                        self.session_picker.filter();
+                    }
+                    _ => {}
+                },
             }
         }
     }
 
-    /// Open native load dialog and restore session state
-    fn load_session(&mut self) {
-        let dialog = rfd::FileDialog::new()
-            .set_title("Load Session")
-            .add_filter("JSON", &["json"]);
-
-        if let Some(path) = dialog.pick_file() {
-            match SessionState::load_from_file(&path) {
-                Ok(session) => {
-                    self.sample_pads.pads = session.pads;
-                    self.sequence_state.sequences = session.sequences;
-                    // playing is #[serde(skip)] — derive from pattern
-                    for seq in &mut self.sequence_state.sequences {
-                        seq.playing = seq.any_marked();
+    /// Load mode: file list navigation with fuzzy filter in insert mode.
+    fn handle_session_picker_key_load(&mut self, key: KeyEvent) {
+        match self.session_picker.input_mode {
+            PickerInputMode::Normal => match key.code {
+                KeyCode::Esc | KeyCode::Char('q') => {
+                    self.focus_sequences_global();
+                }
+                KeyCode::Char('j') | KeyCode::Down => {
+                    self.session_picker.move_down();
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    self.session_picker.move_up();
+                }
+                KeyCode::Char('l') | KeyCode::Right => {
+                    self.session_picker.enter_dir();
+                }
+                KeyCode::Enter => {
+                    if let Some(&idx) = self
+                        .session_picker
+                        .filtered
+                        .get(self.session_picker.selected)
+                        && let Some(item) = self.session_picker.items.get(idx)
+                    {
+                        if item.is_dir {
+                            self.session_picker.enter_dir();
+                        } else {
+                            let path = item.path.clone();
+                            self.load_session_from_path(&path);
+                            self.focus_sequences_global();
+                        }
                     }
-                    self.sequence_state.global = session.global;
-                    self.sequence_state.selected = None;
-                    self.sequence_state.global_focused = true;
-                    self.sequence_state.scroll_offset = 0;
-
-                    // Save derived play states so resume has something to restore
-                    self.sequence_state.previously_playing = self
-                        .sequence_state
-                        .sequences
-                        .iter()
-                        .map(|seq| seq.playing)
-                        .collect();
-                    // Pause sequences only (not decks) after loading a session
-                    self.sequence_state.global.mute = true;
-                    for seq in &mut self.sequence_state.sequences {
-                        seq.playing = false;
+                }
+                KeyCode::Char('h') | KeyCode::Left | KeyCode::Backspace => {
+                    self.session_picker.go_up();
+                }
+                KeyCode::Char('i') => {
+                    self.session_picker.input_mode = PickerInputMode::Insert;
+                }
+                KeyCode::Char('g') => {
+                    self.session_picker.selected = 0;
+                    self.session_picker.scroll_offset = 0;
+                }
+                KeyCode::Char('G') => {
+                    self.session_picker.selected =
+                        self.session_picker.filtered.len().saturating_sub(1);
+                    if self.session_picker.selected
+                        >= self.session_picker.scroll_offset + self.session_picker.visible_height
+                    {
+                        self.session_picker.scroll_offset = self
+                            .session_picker
+                            .selected
+                            .saturating_sub(self.session_picker.visible_height - 1);
                     }
+                }
+                _ => {}
+            },
+            PickerInputMode::Insert => match key.code {
+                KeyCode::Esc => {
+                    self.session_picker.input_mode = PickerInputMode::Normal;
+                }
+                KeyCode::Enter => {
+                    self.session_picker.input_mode = PickerInputMode::Normal;
+                }
+                KeyCode::Backspace => {
+                    self.session_picker.query.pop();
+                    self.session_picker.filter();
+                }
+                KeyCode::Down => {
+                    self.session_picker.move_down();
+                }
+                KeyCode::Up => {
+                    self.session_picker.move_up();
+                }
+                KeyCode::Char(c) => {
+                    self.session_picker.query.push(c);
+                    self.session_picker.filter();
+                }
+                _ => {}
+            },
+        }
+    }
 
-                    // Reload pad samples into the audio engine
-                    for (pad_idx, pad) in self.sample_pads.pads.iter().enumerate() {
-                        if let Some(ref path) = pad.sample_path
-                            && path.exists()
-                        {
-                            if let Some(ref mut engine) = self.sample_engine {
-                                let _ = engine.preload(path);
+    fn save_session_to_path(&mut self, path: &std::path::Path) {
+        let session = SessionState::from_current(&self.sample_pads.pads, &self.sequence_state);
+        match session.save_to_file(path) {
+            Ok(()) => self.log_debug(format!("Session saved to {}", path.display())),
+            Err(e) => self.log_debug(format!("Save failed: {}", e)),
+        }
+    }
+
+    fn load_session_from_path(&mut self, path: &std::path::Path) {
+        match SessionState::load_from_file(path) {
+            Ok(session) => {
+                self.sample_pads.pads = session.pads;
+                self.sequence_state.sequences = session.sequences;
+                for seq in &mut self.sequence_state.sequences {
+                    seq.playing = seq.any_marked();
+                }
+                self.sequence_state.global = session.global;
+                self.sequence_state.selected = None;
+                self.sequence_state.global_focused = true;
+                self.sequence_state.scroll_offset = 0;
+                self.sequence_state.previously_playing = self
+                    .sequence_state
+                    .sequences
+                    .iter()
+                    .map(|seq| seq.playing)
+                    .collect();
+                self.sequence_state.global.mute = true;
+                for seq in &mut self.sequence_state.sequences {
+                    seq.playing = false;
+                }
+                // Reload pad samples into the audio engine
+                for (pad_idx, pad) in self.sample_pads.pads.iter().enumerate() {
+                    if let Some(ref sample_path) = pad.sample_path
+                        && sample_path.exists()
+                    {
+                        if let Some(ref mut engine) = self.sample_engine {
+                            let _ = engine.preload(sample_path);
+                        }
+                        let pad_cfg = pad.config.clone();
+                        if let Some(ref engine) = self.audio_engine {
+                            let mut loaded = false;
+                            if let Some(ref sample_eng) = self.sample_engine
+                                && let Some(cached) = sample_eng.cache.get(sample_path)
+                            {
+                                let processed =
+                                    crate::audio::sample_cache::apply_dsp_to_buffer(
+                                        &cached.samples,
+                                        &pad_cfg,
+                                    );
+                                engine.set_pad_sample(
+                                    pad_idx,
+                                    processed,
+                                    cached.sample_rate,
+                                    cached.channels,
+                                );
+                                loaded = true;
                             }
-                            let pad_cfg = pad.config.clone();
-                            if let Some(ref engine) = self.audio_engine {
-                                let mut loaded = false;
-                                if let Some(ref sample_eng) = self.sample_engine
-                                    && let Some(cached) = sample_eng.cache.get(path)
-                                {
-                                    let processed = crate::audio::sample_cache::apply_dsp_to_buffer(
+                            if !loaded
+                                && let Ok(cached) =
+                                    crate::audio::sample_cache::CachedSample::load(sample_path)
+                            {
+                                let processed =
+                                    crate::audio::sample_cache::apply_dsp_to_buffer(
                                         &cached.samples,
                                         &pad_cfg,
                                     );
-                                    engine.set_pad_sample(
-                                        pad_idx,
-                                        processed,
-                                        cached.sample_rate,
-                                        cached.channels,
-                                    );
-                                    loaded = true;
-                                }
-                                if !loaded
-                                    && let Ok(cached) =
-                                        crate::audio::sample_cache::CachedSample::load(path)
-                                {
-                                    let processed = crate::audio::sample_cache::apply_dsp_to_buffer(
-                                        &cached.samples,
-                                        &pad_cfg,
-                                    );
-                                    engine.set_pad_sample(
-                                        pad_idx,
-                                        processed,
-                                        cached.sample_rate,
-                                        cached.channels,
-                                    );
-                                }
+                                engine.set_pad_sample(
+                                    pad_idx,
+                                    processed,
+                                    cached.sample_rate,
+                                    cached.channels,
+                                );
                             }
                         }
                     }
-
-                    self.log_debug(format!("Session loaded from {}", path.display()));
                 }
-                Err(e) => {
-                    self.log_debug(format!("Load failed: {}", e));
-                }
+                self.log_debug(format!("Session loaded from {}", path.display()));
+            }
+            Err(e) => {
+                self.log_debug(format!("Load failed: {}", e));
             }
         }
+    }
+
+    /// Return focus to the SEQUENCES pane with sub-navigation active.
+    /// Used when closing the session picker to land back on the global bar.
+    fn focus_sequences_global(&mut self) {
+        self.selected_pane = SelectedPane::Loops;
+        self.sequence_state.global_focused = true;
+        self.mode = AppMode::ControlSelect;
+    }
+
+    /// Open the session picker to save session state
+    fn save_session(&mut self) {
+        self.session_picker.set_root(self.sessions_dir.clone());
+        self.session_picker.is_save = true;
+        self.session_picker.input_mode = PickerInputMode::Normal;
+        self.session_picker.query.clear();
+        self.session_picker.save_name = "session.json".to_string();
+        self.session_picker.save_name_cursor = self.session_picker.save_name.len();
+        self.session_picker.selected = 0;
+        self.session_picker.editing_save_name = false;
+        self.session_picker.status_message = None;
+        self.session_picker.scan_dir();
+        self.mode = AppMode::SessionPicker;
+    }
+
+    /// Open the session picker to load session state
+    fn load_session(&mut self) {
+        self.session_picker.set_root(self.sessions_dir.clone());
+        self.session_picker.is_save = false;
+        self.session_picker.input_mode = PickerInputMode::Normal;
+        self.session_picker.query.clear();
+        self.session_picker.selected = 0;
+        self.session_picker.scan_dir();
+        self.mode = AppMode::SessionPicker;
     }
 
     /// Mode 1: Pane Select - navigate between panes with Tab/hjkl
@@ -7313,8 +7970,39 @@ impl App {
         self.source_picker.tab_focused = true;
         self.source_picker.add_query.clear();
         self.source_picker.add_input_mode = PickerInputMode::Normal;
+        self.source_picker.add_marked.clear();
+        self.source_picker.add_selection_anchor = None;
         self.source_picker.add_current_dir = self.source_picker.root_dir.clone();
         self.scan_add_sources();
+    }
+
+    fn add_sources_to_queue(&mut self, items: Vec<SourcePickerItem>) {
+        let items: Vec<_> = items.into_iter().filter(|item| !item.is_dir).collect();
+        if items.is_empty() {
+            return;
+        }
+
+        let was_empty = self.source_picker.queue.is_empty();
+        let first_new_idx = self.source_picker.queue.len();
+        self.source_picker.queue.extend(items.into_iter().map(|item| QueueItem {
+            name: item.name,
+            path: item.path,
+            is_socket: item.is_socket,
+            is_pcm_fifo: item.is_pcm_fifo,
+            is_udp: item.is_udp,
+        }));
+        self.save_queue_to_deck();
+        self.source_picker.adding_to_queue = false;
+        self.source_picker.tab = SourcePickerTab::Queue;
+        self.source_picker.queue_selected = Some(self.source_picker.queue.len() - 1);
+
+        if was_empty {
+            let loaded_item = self.source_picker.queue[first_new_idx].clone();
+            if let AppMode::SourcePicker(deck) = self.mode {
+                self.deck_queue_indices[deck.index()] = first_new_idx;
+                self.load_queue_item(deck, &loaded_item);
+            }
+        }
     }
 
     /// Handle key events in the add-to-queue sub-view
@@ -7329,7 +8017,23 @@ impl App {
                 KeyCode::Char('i') => {
                     self.source_picker.add_input_mode = PickerInputMode::Insert;
                 }
+                KeyCode::Char('J') | KeyCode::Down
+                    if matches!(key.code, KeyCode::Char('J'))
+                        || key.modifiers.contains(KeyModifiers::SHIFT) =>
+                {
+                    self.source_picker.tab_focused = false;
+                    self.source_picker.add_extend_selection(true);
+                }
+                KeyCode::Char('K') | KeyCode::Up
+                    if matches!(key.code, KeyCode::Char('K'))
+                        || key.modifiers.contains(KeyModifiers::SHIFT) =>
+                {
+                    self.source_picker.tab_focused = false;
+                    self.source_picker.add_extend_selection(false);
+                }
                 KeyCode::Char('j') | KeyCode::Down => {
+                    self.source_picker.add_marked.clear();
+                    self.source_picker.add_selection_anchor = None;
                     if self.source_picker.tab_focused {
                         self.source_picker.tab_focused = false;
                         self.source_picker.add_selected = 0;
@@ -7344,6 +8048,8 @@ impl App {
                     }
                 }
                 KeyCode::Char('k') | KeyCode::Up => {
+                    self.source_picker.add_marked.clear();
+                    self.source_picker.add_selection_anchor = None;
                     if self.source_picker.tab_focused {
                         self.source_picker.tab_focused = false;
                         self.source_picker.add_selected =
@@ -7381,6 +8087,8 @@ impl App {
                         if let Some(item) = self.source_picker.add_selected_item().cloned() {
                             if item.is_dir {
                                 self.source_picker.add_current_dir = item.path;
+                                self.source_picker.add_marked.clear();
+                                self.source_picker.add_selection_anchor = None;
                                 self.scan_add_sources();
                             } else {
                                 self.source_picker.add_next_tab();
@@ -7405,11 +8113,15 @@ impl App {
                 }
                 KeyCode::Char('g') => {
                     self.source_picker.tab_focused = false;
+                    self.source_picker.add_marked.clear();
+                    self.source_picker.add_selection_anchor = None;
                     self.source_picker.add_selected = 0;
                     self.source_picker.add_scroll_offset = 0;
                 }
                 KeyCode::Char('G') => {
                     self.source_picker.tab_focused = false;
+                    self.source_picker.add_marked.clear();
+                    self.source_picker.add_selection_anchor = None;
                     if self.source_picker.add_filtered.is_empty() {
                         self.source_picker.add_selected = 0;
                     } else {
@@ -7427,32 +8139,24 @@ impl App {
                             // Enter directory
                             self.source_picker.add_current_dir = item.path;
                             self.source_picker.add_query.clear();
+                            self.source_picker.add_marked.clear();
+                            self.source_picker.add_selection_anchor = None;
                             self.scan_add_sources();
                         } else {
-                            // Add to queue
-                            let was_empty = self.source_picker.queue.is_empty();
-                            self.source_picker.queue.push(QueueItem {
-                                name: item.name,
-                                path: item.path,
-                                is_socket: item.is_socket,
-                                is_pcm_fifo: item.is_pcm_fifo,
-                                is_udp: item.is_udp,
-                            });
-                            self.save_queue_to_deck();
-                            // Return to Queue tab
-                            self.source_picker.adding_to_queue = false;
-                            self.source_picker.tab = SourcePickerTab::Queue;
-                            // Select the newly added item
-                            let new_idx = self.source_picker.queue.len() - 1;
-                            self.source_picker.queue_selected = Some(new_idx);
-                            // If this was the first item added, load it immediately
-                            if was_empty {
-                                let loaded_item = self.source_picker.queue[new_idx].clone();
-                                if let AppMode::SourcePicker(deck) = self.mode {
-                                    self.deck_queue_indices[deck.index()] = 0;
-                                    self.load_queue_item(deck, &loaded_item);
-                                }
-                            }
+                            let items = if self.source_picker.add_marked.is_empty() {
+                                vec![item]
+                            } else {
+                                self.source_picker
+                                    .add_filtered
+                                    .iter()
+                                    .filter_map(|&idx| self.source_picker.add_items.get(idx))
+                                    .filter(|item| {
+                                        self.source_picker.add_marked.contains(&item.path)
+                                    })
+                                    .cloned()
+                                    .collect()
+                            };
+                            self.add_sources_to_queue(items);
                         }
                     }
                 }
@@ -7466,28 +8170,26 @@ impl App {
                     if let Some(item) = self.source_picker.add_selected_item().cloned() {
                         if item.is_dir {
                             self.source_picker.add_current_dir = item.path;
+                            self.source_picker.add_query.clear();
+                            self.source_picker.add_input_mode = PickerInputMode::Normal;
+                            self.source_picker.add_marked.clear();
+                            self.source_picker.add_selection_anchor = None;
                             self.scan_add_sources();
                         } else {
-                            let was_empty = self.source_picker.queue.is_empty();
-                            self.source_picker.queue.push(QueueItem {
-                                name: item.name,
-                                path: item.path,
-                                is_socket: item.is_socket,
-                                is_pcm_fifo: item.is_pcm_fifo,
-                                is_udp: item.is_udp,
-                            });
-                            self.save_queue_to_deck();
-                            self.source_picker.adding_to_queue = false;
-                            self.source_picker.tab = SourcePickerTab::Queue;
-                            let new_idx = self.source_picker.queue.len() - 1;
-                            self.source_picker.queue_selected = Some(new_idx);
-                            if was_empty {
-                                let loaded_item = self.source_picker.queue[new_idx].clone();
-                                if let AppMode::SourcePicker(deck) = self.mode {
-                                    self.deck_queue_indices[deck.index()] = 0;
-                                    self.load_queue_item(deck, &loaded_item);
-                                }
-                            }
+                            let items = if self.source_picker.add_marked.is_empty() {
+                                vec![item]
+                            } else {
+                                self.source_picker
+                                    .add_filtered
+                                    .iter()
+                                    .filter_map(|&idx| self.source_picker.add_items.get(idx))
+                                    .filter(|item| {
+                                        self.source_picker.add_marked.contains(&item.path)
+                                    })
+                                    .cloned()
+                                    .collect()
+                            };
+                            self.add_sources_to_queue(items);
                         }
                     }
                 }

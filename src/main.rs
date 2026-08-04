@@ -48,6 +48,11 @@ fn main() -> Result<()> {
         app.set_samples_dir(dir);
     }
 
+    // Set session directory if provided
+    if let Some(dir) = cli.session_dir {
+        app.set_session_dir(dir);
+    }
+
     // Initialize Rust-native audio engine before configuring sources,
     // so engine.load_file() works during auto-load.
     // This happens BEFORE terminal setup so ALSA/PipeWire errors are
@@ -132,6 +137,7 @@ struct CliArgs {
     auto_discover: bool,
     music_dir: Option<PathBuf>,
     samples_dir: Option<PathBuf>,
+    session_dir: Option<PathBuf>,
 }
 
 fn parse_args(args: &[String]) -> CliArgs {
@@ -139,6 +145,7 @@ fn parse_args(args: &[String]) -> CliArgs {
     let mut auto_discover = false;
     let mut music_dir = None;
     let mut samples_dir = None;
+    let mut session_dir = None;
     let mut i = 1;
 
     while i < args.len() {
@@ -172,6 +179,15 @@ fn parse_args(args: &[String]) -> CliArgs {
                     i += 1;
                 }
             }
+            "--session-dir" | "-L" => {
+                if i + 1 < args.len() {
+                    session_dir = Some(PathBuf::from(&args[i + 1]));
+                    i += 2;
+                } else {
+                    eprintln!("--session-dir requires a PATH argument");
+                    i += 1;
+                }
+            }
             "--discover" | "-d" => {
                 auto_discover = true;
                 i += 1;
@@ -198,11 +214,19 @@ fn parse_args(args: &[String]) -> CliArgs {
         music_dir = Some(PathBuf::from(home).join("Music"));
     }
 
+    // Default session dir to ~/Documents when not provided
+    if session_dir.is_none()
+        && let Ok(home) = std::env::var("HOME")
+    {
+        session_dir = Some(PathBuf::from(home).join("Documents"));
+    }
+
     CliArgs {
         sources,
         auto_discover,
         music_dir,
         samples_dir,
+        session_dir,
     }
 }
 
@@ -231,9 +255,10 @@ OPTIONS:
     -S, --samples-dir PATH      Directory for sample pad files
                                 (default: macOS ~/Library/Application Support/SuperCollider/downloaded-quarks/Dirt-Samples,
                                           Linux ~/.local/share/SuperCollider/downloaded-quarks/Dirt-Samples)
+    -L, --session-dir PATH      Directory for session save/load (default: ~/Documents)
     -d, --discover              Auto-discover audio sources (default if no -s)
     -h, --help                  Show this help message
-
+    
 EXAMPLES:
     # Start with two MPV instances
     termixer -s "Music" /tmp/mpv-music.sock -s "Effects" /tmp/mpv-fx.sock
@@ -365,6 +390,11 @@ where
             // Add sample picker if active
             if let app::AppMode::SamplePicker(pad_idx) = app.mode {
                 view = view.sample_picker(pad_idx, &app.source_picker);
+            }
+
+            // Add session picker if active
+            if let app::AppMode::SessionPicker = app.mode {
+                view = view.session_picker(&app.session_picker);
             }
 
             frame.render_widget(view, frame.area());

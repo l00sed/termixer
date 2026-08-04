@@ -6,20 +6,23 @@ A terminal-based DJ mixer for live performance with [TidalCycles](https://tidalc
 
 ## Features
 
-- **Dual-deck mixer** with per-channel fader, pan, 3-band EQ, LPF/HPF
-- **DJ center** with crossfader, cue mix, headphone/booth outputs
-- **Microphone input** with selectable device, gain, and mute toggle
-- **Sample pads** — 4x4 grid with sequencer
-- **Auto-discovery** of MPV sockets, SuperCollider, PulseAudio, PipeWire, JACK sources
-- **SuperCollider integration** — custom SynthDefs for mixer channel processing
-- **Vim navigation** — hjkl throughout, 3-level mode system
+| | |
+| --- | --- |
+| **Dual-deck mixer** | A-B channel faders, pan, 3-band EQ, LPF/HPF |
+| **Crossfader** | mix different decks, cue-in Deck C with unique output (headphone/booth) |
+| **Microphone input** | selectable device, gain, and mute toggle |
+| **Sample pads** | 4x4 grid with sequencer, save/load configs |
+| **SuperCollider integration** | custom SynthDefs for processing SuperCollider output |
+| **Vim navigation** | hjkl throughout, multi-modal nav system |
 
 ## Prerequisites
 
-- **Rust**
-- **[Nerd Fonts](https://www.nerdfonts.com/)** — required for icons (rewind, fast-forward, etc.)
-- **MPV** — media playback with IPC socket support
-- **SuperCollider** (optional) — for TidalCycles integration
+| | |
+| --- | --- |
+| **[Rust](https://rust-lang.org/tools/install/)** | `cargo` package manager and Rust language compiler |
+| **[Nerd Fonts](https://www.nerdfonts.com/)** | required for icons (rewind, fast-forward, etc.) |
+| **[MPV](https://mpv.io/)** | media playback with IPC socket support |
+| **[SuperCollider](https://supercollider.github.io/)** (optional) | for TidalCycles integration |
 
 ## Installation
 
@@ -77,12 +80,14 @@ To manage your own `mpv` config and disable automatic seeding of `~/.config/mpv/
 
 **NOTE**: Termixer uses the default [SuperDirt](https://github.com/tidalcycles/Dirt-Samples/) samples installation directory by default. It's a great, free library to grab some starter samples.
 
-macOS — ~/Library/Application Support/SuperCollider/downloaded-quarks/Dirt-Samples
-Linux — ~/.local/share/SuperCollider/downloaded-quarks/Dirt-Samples
+macOS — `~/Library/Application Support/SuperCollider/downloaded-quarks/Dirt-Samples`
 
-Change the sample directory with `termixer -S PATH`.
+Linux — `~/.local/share/SuperCollider/downloaded-quarks/Dirt-Samples`
 
-Pad and sequence configurations can be exported to `.json` files and imported later to restore all saved samples, pad settings, and sequences.
+Pad and sequence configurations can be exported to `.json` files and imported later to restore all saved samples, pad settings, and sequences. The default save/load directory is `~/Documents`.
+
+- Change the sample directory with `termixer -S PATH`.
+- Change the sequences/samples ("sessions") directory with `termixer -L PATH`.
 
 
 ### CLI Options
@@ -92,6 +97,7 @@ Pad and sequence configurations can be exported to `.json` files and imported la
 | `-s, --source NAME SOCKET` | Add an audio source (MPV IPC socket) |
 | `-m, --music-dir PATH` | Directory for audio file browser |
 | `-S, --samples-dir PATH` | Directory for sample pad files |
+| `-L, --session-dir PATH` | Directory for session save/load (default: ~/Documents) |
 | `-d, --discover` | Auto-discover audio sources (default) |
 | `-h, --help` | Show help |
 
