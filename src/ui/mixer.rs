@@ -1694,9 +1694,14 @@ impl<'a> MixerView<'a> {
             };
             let is_active = picker.add_tab == *tab;
             let style = if is_active {
+                let background = if picker.tab_focused {
+                    BORDER_ACTIVE
+                } else {
+                    BG_TAB_UNFOCUSED
+                };
                 Style::default()
                     .fg(Color::Black)
-                    .bg(BORDER_ACTIVE)
+                    .bg(background)
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(TEXT_DEFAULT)
@@ -1746,8 +1751,9 @@ impl<'a> MixerView<'a> {
                     break;
                 }
 
-                let is_selected =
-                    i == picker.add_selected && picker.add_selected < picker.add_filtered.len();
+                let is_selected = i == picker.add_selected
+                    && picker.add_selected < picker.add_filtered.len()
+                    && !picker.tab_focused;
                 let style = if is_selected {
                     Style::default().fg(Color::Black).bg(BORDER_ACTIVE)
                 } else {

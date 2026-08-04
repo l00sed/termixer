@@ -570,10 +570,12 @@ pub struct SequenceState {
     pub global_focused: bool,
     /// Current horizontal cursor target (steps/mute/multiplier)
     pub cursor: EditTarget,
-    /// Per-sequence play state saved before master pause
+    /// Per-sequence play state saved before global sequence mute
     pub previously_playing: Vec<bool>,
-    /// Global mute state saved before master pause
-    pub previously_global_mute: bool,
+    /// Per-sequence play state saved before master pause
+    pub master_previously_playing: Vec<bool>,
+    /// Global sequence mute state saved before master pause
+    pub master_previously_global_mute: bool,
 }
 
 impl SequenceState {
@@ -587,7 +589,8 @@ impl SequenceState {
             global_focused: true,
             cursor: EditTarget::Step(0),
             previously_playing: Vec::new(),
-            previously_global_mute: false,
+            master_previously_playing: Vec::new(),
+            master_previously_global_mute: false,
         }
     }
 

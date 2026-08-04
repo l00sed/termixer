@@ -56,6 +56,17 @@ fn main() -> Result<()> {
         Ok(engine) => {
             engine.set_mic_gain(app.mixer.master.mic_fader * 2.0);
             engine.set_mic_muted(true);
+            app.mic_input_devices = engine.list_mic_inputs().unwrap_or_default();
+            app.selected_mic_input_idx = app
+                .mic_input_devices
+                .iter()
+                .position(|device| device.is_default)
+                .unwrap_or(0);
+            if let Some(device) = app.mic_input_devices.get(app.selected_mic_input_idx)
+                && let Err(error) = engine.select_mic_input(device.index)
+            {
+                eprintln!("Default microphone input unavailable: {error}");
+            }
             app.audio_engine = Some(engine);
         }
         Err(e) => {

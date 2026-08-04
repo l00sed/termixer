@@ -344,6 +344,7 @@ impl SourcePickerState {
             AddSourceTab::MpvSockets => AddSourceTab::AudioFiles,
             AddSourceTab::AudioFiles => AddSourceTab::MpvSockets,
         };
+        self.tab_focused = true;
     }
 
     pub fn add_prev_tab(&mut self) {
@@ -351,6 +352,7 @@ impl SourcePickerState {
             AddSourceTab::MpvSockets => AddSourceTab::AudioFiles,
             AddSourceTab::AudioFiles => AddSourceTab::MpvSockets,
         };
+        self.tab_focused = true;
     }
 
     /// Ensure scroll offset keeps selected item visible
@@ -445,6 +447,7 @@ impl SourcePickerState {
 mod source_picker_tests {
     use std::path::PathBuf;
 
+    use crate::state::Sequence;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     use super::{
@@ -526,6 +529,58 @@ mod source_picker_tests {
         assert!(!app.mixer.master.playing);
         app.handle_control_select_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert!(app.mixer.master.playing);
+    }
+
+    #[test]
+    fn master_controls_follow_visual_vertical_navigation() {
+        let mut app = App::new(2);
+        app.mode = AppMode::ControlSelect;
+        app.selected_pane = SelectedPane::Master;
+        app.mixer.focus = SelectionFocus::Global;
+
+        app.mixer.selected_global = GlobalControl::MasterMute;
+        app.handle_control_select_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
+        assert_eq!(app.mixer.selected_global, GlobalControl::MasterPlayPause);
+
+        app.mixer.selected_global = GlobalControl::MasterOutputSelect;
+        app.handle_control_select_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE));
+        assert_eq!(app.mixer.selected_global, GlobalControl::MasterFader);
+    }
+
+    #[test]
+    fn master_pause_only_resumes_previously_playing_decks_and_sequences() {
+        let mut app = App::new(2);
+        app.mixer.get_channel_mut(0).unwrap().playing = true;
+        app.mixer.get_channel_mut(1).unwrap().playing = false;
+        app.mixer.cue_channel.playing = false;
+        app.sequence_state.sequences = vec![Sequence::new(0, 0), Sequence::new(1, 1)];
+        app.sequence_state.sequences[0].playing = true;
+        app.sequence_state.sequences[1].playing = false;
+
+        app.handle_key(KeyEvent::new(KeyCode::F(8), KeyModifiers::NONE));
+        assert!(!app.mixer.get_channel(0).unwrap().playing);
+        assert!(!app.mixer.get_channel(1).unwrap().playing);
+        assert!(app.sequence_state.sequences.iter().all(|seq| !seq.playing));
+
+        app.handle_key(KeyEvent::new(KeyCode::F(8), KeyModifiers::NONE));
+        assert!(app.mixer.get_channel(0).unwrap().playing);
+        assert!(!app.mixer.get_channel(1).unwrap().playing);
+        assert!(app.sequence_state.sequences[0].playing);
+        assert!(!app.sequence_state.sequences[1].playing);
+    }
+
+    #[test]
+    fn master_pause_preserves_sequence_global_mute() {
+        let mut app = App::new(2);
+        app.sequence_state.sequences = vec![Sequence::new(0, 0)];
+        app.sequence_state.sequences[0].playing = true;
+        app.sequence_state.global.mute = true;
+
+        app.handle_key(KeyEvent::new(KeyCode::F(8), KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::F(8), KeyModifiers::NONE));
+
+        assert!(app.sequence_state.global.mute);
+        assert!(app.sequence_state.sequences[0].playing);
     }
 
     #[test]
@@ -3423,7 +3478,6 @@ impl App {
                     self.sequence_state.scroll_offset = 0;
 
                     // Save derived play states so resume has something to restore
-                    self.sequence_state.previously_global_mute = false;
                     self.sequence_state.previously_playing = self
                         .sequence_state
                         .sequences
@@ -4311,7 +4365,7 @@ impl App {
                         GlobalControl::MicFader => GlobalControl::MicInputSelect,
                         GlobalControl::MicInputSelect => GlobalControl::MasterFader,
                         GlobalControl::MasterFader => GlobalControl::MasterMute,
-                        GlobalControl::MasterMute => GlobalControl::MasterOutputSelect,
+                        GlobalControl::MasterMute => GlobalControl::MasterPlayPause,
                         GlobalControl::MasterOutputSelect => GlobalControl::MasterPlayPause,
                         other => other,
                     };
@@ -4443,7 +4497,7 @@ impl App {
                         GlobalControl::MicInputSelect => GlobalControl::MicMute,
                         GlobalControl::MasterFader => GlobalControl::MicInputSelect,
                         GlobalControl::MasterMute => GlobalControl::MasterFader,
-                        GlobalControl::MasterOutputSelect => GlobalControl::MasterMute,
+                        GlobalControl::MasterOutputSelect => GlobalControl::MasterFader,
                         other => other,
                     };
                 }
@@ -5270,11 +5324,10 @@ impl App {
         self.mixer.master.playing = true;
         self.mixer.master.master_eq = [0.0; 10];
 
-        // Restore sequences from master-pause saved state
-        self.sequence_state.global.mute = self.sequence_state.previously_global_mute;
+        self.sequence_state.global.mute = self.sequence_state.master_previously_global_mute;
         for (i, seq) in self.sequence_state.sequences.iter_mut().enumerate() {
-            if i < self.sequence_state.previously_playing.len() {
-                seq.playing = self.sequence_state.previously_playing[i];
+            if i < self.sequence_state.master_previously_playing.len() {
+                seq.playing = self.sequence_state.master_previously_playing[i];
             }
         }
 
@@ -6124,6 +6177,11 @@ impl App {
                     self.mic_input_devices
                         .iter()
                         .position(|device| device.index == index)
+                })
+                .or_else(|| {
+                    self.mic_input_devices
+                        .iter()
+                        .position(|device| device.is_default)
                 })
                 .unwrap_or(0);
             return;
@@ -7252,6 +7310,7 @@ impl App {
     fn enter_add_source_mode(&mut self) {
         self.source_picker.adding_to_queue = true;
         self.source_picker.add_tab = AddSourceTab::MpvSockets;
+        self.source_picker.tab_focused = true;
         self.source_picker.add_query.clear();
         self.source_picker.add_input_mode = PickerInputMode::Normal;
         self.source_picker.add_current_dir = self.source_picker.root_dir.clone();
@@ -7271,10 +7330,31 @@ impl App {
                     self.source_picker.add_input_mode = PickerInputMode::Insert;
                 }
                 KeyCode::Char('j') | KeyCode::Down => {
-                    self.source_picker.add_move_down();
+                    if self.source_picker.tab_focused {
+                        self.source_picker.tab_focused = false;
+                        self.source_picker.add_selected = 0;
+                        self.source_picker.add_scroll_offset = 0;
+                    } else if self.source_picker.add_selected + 1
+                        >= self.source_picker.add_filtered.len()
+                    {
+                        self.source_picker.tab_focused = true;
+                        self.source_picker.add_selected = self.source_picker.add_filtered.len();
+                    } else {
+                        self.source_picker.add_move_down();
+                    }
                 }
                 KeyCode::Char('k') | KeyCode::Up => {
-                    self.source_picker.add_move_up();
+                    if self.source_picker.tab_focused {
+                        self.source_picker.tab_focused = false;
+                        self.source_picker.add_selected =
+                            self.source_picker.add_filtered.len().saturating_sub(1);
+                        self.source_picker.add_clamp_scroll();
+                    } else if self.source_picker.add_selected == 0 {
+                        self.source_picker.tab_focused = true;
+                        self.source_picker.add_selected = self.source_picker.add_filtered.len();
+                    } else {
+                        self.source_picker.add_move_up();
+                    }
                 }
                 KeyCode::Char('h') | KeyCode::Left => {
                     if self.source_picker.add_tab == AddSourceTab::AudioFiles {
@@ -7324,10 +7404,12 @@ impl App {
                     self.scan_add_sources();
                 }
                 KeyCode::Char('g') => {
+                    self.source_picker.tab_focused = false;
                     self.source_picker.add_selected = 0;
                     self.source_picker.add_scroll_offset = 0;
                 }
                 KeyCode::Char('G') => {
+                    self.source_picker.tab_focused = false;
                     if self.source_picker.add_filtered.is_empty() {
                         self.source_picker.add_selected = 0;
                     } else {
@@ -7336,11 +7418,15 @@ impl App {
                     self.source_picker.add_clamp_scroll();
                 }
                 KeyCode::Enter => {
-                    // Add selected item to queue
-                    if let Some(item) = self.source_picker.add_selected_item().cloned() {
+                    if self.source_picker.tab_focused {
+                        self.source_picker.tab_focused = false;
+                        self.source_picker.add_selected = 0;
+                        self.source_picker.add_scroll_offset = 0;
+                    } else if let Some(item) = self.source_picker.add_selected_item().cloned() {
                         if item.is_dir {
                             // Enter directory
                             self.source_picker.add_current_dir = item.path;
+                            self.source_picker.add_query.clear();
                             self.scan_add_sources();
                         } else {
                             // Add to queue
@@ -9745,12 +9831,11 @@ impl App {
                     engine.state.set_playing(idx, was_playing);
                 }
             }
-            // Restore sequences that were playing before the pause
-            // Always unmute on resume — master play should start audio
-            self.sequence_state.global.mute = false;
+            // Restore only the sequences that were playing before the master pause.
+            self.sequence_state.global.mute = self.sequence_state.master_previously_global_mute;
             for (i, seq) in self.sequence_state.sequences.iter_mut().enumerate() {
-                if i < self.sequence_state.previously_playing.len() {
-                    seq.playing = self.sequence_state.previously_playing[i];
+                if i < self.sequence_state.master_previously_playing.len() {
+                    seq.playing = self.sequence_state.master_previously_playing[i];
                 }
             }
         } else {
@@ -9758,20 +9843,6 @@ impl App {
             // then pause all.
             self.mixer.previously_playing.clear();
             for idx in 0..self.mixer.channels.len() {
-                let was_playing = self
-                    .mpv_for_channel(idx)
-                    .and_then(|c| c.get_pause().ok())
-                    .map(|paused| !paused)
-                    .unwrap_or_else(|| {
-                        self.mixer
-                            .get_channel(idx)
-                            .map(|c| c.playing)
-                            .unwrap_or(false)
-                    });
-                self.mixer.previously_playing.push(was_playing);
-                if let Some(channel) = self.mixer.get_channel_mut(idx) {
-                    channel.playing = false;
-                }
                 let engine_active = self
                     .audio_engine
                     .as_ref()
@@ -9783,6 +9854,23 @@ impl App {
                     .map(|e| e.has_capture(idx))
                     .unwrap_or(false);
                 let decoder_owned = engine_active && !has_capture;
+                let channel_playing = self
+                    .mixer
+                    .get_channel(idx)
+                    .map(|c| c.playing)
+                    .unwrap_or(false);
+                let was_playing = if decoder_owned {
+                    channel_playing
+                } else {
+                    self.mpv_for_channel(idx)
+                        .and_then(|c| c.get_pause().ok())
+                        .map(|paused| !paused)
+                        .unwrap_or(channel_playing)
+                };
+                self.mixer.previously_playing.push(was_playing);
+                if let Some(channel) = self.mixer.get_channel_mut(idx) {
+                    channel.playing = false;
+                }
 
                 if has_capture {
                     let _ = self.send_route_command_for_channel(
@@ -9806,26 +9894,36 @@ impl App {
                 }
             }
             // Also save and pause CUE channel
-            let cue_was_playing = self
-                .mpv_for_channel(2)
-                .and_then(|c| c.get_pause().ok())
-                .map(|paused| !paused)
-                .unwrap_or(self.mixer.cue_channel.playing);
+            let cue_idx = self.mixer.dj.deck_c_channel;
+            let cue_decoder_owned = self
+                .audio_engine
+                .as_ref()
+                .map(|e| e.has_decoder(cue_idx) && !e.has_capture(cue_idx))
+                .unwrap_or(false);
+            let cue_playing = self.mixer.cue_channel.playing;
+            let cue_was_playing = if cue_decoder_owned {
+                cue_playing
+            } else {
+                self.mpv_for_channel(cue_idx)
+                    .and_then(|c| c.get_pause().ok())
+                    .map(|paused| !paused)
+                    .unwrap_or(cue_playing)
+            };
             self.mixer.previously_playing.push(cue_was_playing);
             self.mixer.cue_channel.playing = false;
-            if let Some(client) = self.mpv_for_channel(2) {
+            if let Some(client) = self.mpv_for_channel(cue_idx) {
                 let _ = client.set_pause(true);
             }
-            if let Some(client) = self.sc_for_channel(2) {
+            if let Some(client) = self.sc_for_channel(cue_idx) {
                 let _ = client.set_pause(true);
             }
             if let Some(ref engine) = self.audio_engine {
-                engine.state.set_playing(2, false);
+                engine.state.set_playing(cue_idx, false);
             }
             // Save and pause all sequences
-            self.sequence_state.previously_global_mute = self.sequence_state.global.mute;
+            self.sequence_state.master_previously_global_mute = self.sequence_state.global.mute;
             self.sequence_state.global.mute = true;
-            self.sequence_state.previously_playing = self
+            self.sequence_state.master_previously_playing = self
                 .sequence_state
                 .sequences
                 .iter()
