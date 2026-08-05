@@ -1,21 +1,17 @@
-//! Config file management — checks version-controlled config files against
+//! Config file management — checks embedded config files against
 //! installed destinations and prompts the user to update them.
 
 use std::path::{Path, PathBuf};
 
 pub struct ConfigFile {
     pub label: &'static str,
-    pub repo_name: &'static str,
+    pub content: &'static [u8],
     pub install_path: PathBuf,
     pub executable: bool,
 }
 
 pub struct ConfigDiff {
     pub file_index: usize,
-}
-
-fn config_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config")
 }
 
 pub fn managed_files() -> Vec<ConfigFile> {
@@ -25,46 +21,39 @@ pub fn managed_files() -> Vec<ConfigFile> {
     vec![
         ConfigFile {
             label: "MPV wrapper script",
-            repo_name: "mpv",
+            content: include_bytes!("../config/mpv"),
             install_path: local_bin.join("mpv"),
             executable: true,
         },
         ConfigFile {
             label: "MPV config",
-            repo_name: "mpv.conf",
+            content: include_bytes!("../config/mpv.conf"),
             install_path: config_dir.join("mpv.conf"),
             executable: false,
         },
         ConfigFile {
             label: "Auto-socket Lua script",
-            repo_name: "auto-socket.lua",
+            content: include_bytes!("../config/auto-socket.lua"),
             install_path: config_dir.join("scripts/auto-socket.lua"),
             executable: false,
         },
     ]
 }
 
-/// Compare version-controlled copies against installed destinations.
+/// Compare embedded copies against installed destinations.
 /// Returns indices of files that differ or are missing.
 pub fn check_config_files() -> Vec<ConfigDiff> {
-    let dir = config_dir();
     let files = managed_files();
     let mut diffs = Vec::new();
 
     for (i, file) in files.iter().enumerate() {
-        let repo_file = dir.join(file.repo_name);
-        let repo_bytes = match std::fs::read(&repo_file) {
-            Ok(b) => b,
-            Err(_) => continue, // repo file missing — skip (shouldn't happen)
-        };
         match std::fs::read(&file.install_path) {
             Ok(installed_bytes) => {
-                if repo_bytes != installed_bytes {
+                if file.content != installed_bytes.as_slice() {
                     diffs.push(ConfigDiff { file_index: i });
                 }
             }
             Err(_) => {
-                // Installed file missing — treat as diff
                 diffs.push(ConfigDiff { file_index: i });
             }
         }
@@ -73,15 +62,13 @@ pub fn check_config_files() -> Vec<ConfigDiff> {
     diffs
 }
 
-/// Copy repo versions to install destinations. Returns errors per file.
+/// Write embedded config files to install destinations. Returns errors per file.
 pub fn apply_config_files(diffs: &[ConfigDiff]) -> Vec<String> {
-    let dir = config_dir();
     let files = managed_files();
     let mut errors = Vec::new();
 
     for diff in diffs {
         let file = &files[diff.file_index];
-        let src = dir.join(file.repo_name);
         let dst = &file.install_path;
 
         if let Some(parent) = dst.parent()
@@ -91,8 +78,8 @@ pub fn apply_config_files(diffs: &[ConfigDiff]) -> Vec<String> {
             continue;
         }
 
-        if let Err(e) = std::fs::copy(&src, dst) {
-            errors.push(format!("{}: copy: {}", file.label, e));
+        if let Err(e) = std::fs::write(dst, file.content) {
+            errors.push(format!("{}: write: {}", file.label, e));
             continue;
         }
 

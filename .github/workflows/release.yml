@@ -19,12 +19,12 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
           - target: x86_64-apple-darwin
-            os: macos-13
+            os: macos-15
           - target: aarch64-apple-darwin
             os: macos-14
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.2.2
 
       - name: Install system dependencies (Linux)
         if: runner.os == 'Linux'
@@ -40,20 +40,13 @@ jobs:
       - name: Build release binary
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Package binary (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          cd target/${{ matrix.target }}/release
-          tar czf ../../../termixer-${{ github.ref_name }}-${{ matrix.target }}.tar.gz termixer
-
-      - name: Package binary (macOS)
-        if: runner.os == 'macOS'
+      - name: Package release archive
         run: |
           cd target/${{ matrix.target }}/release
           tar czf ../../../termixer-${{ github.ref_name }}-${{ matrix.target }}.tar.gz termixer
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4.6.2
         with:
           name: termixer-${{ matrix.target }}
           path: termixer-${{ github.ref_name }}-${{ matrix.target }}.tar.gz
@@ -63,7 +56,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4.3.0
         with:
           merge-multiple: true
 
