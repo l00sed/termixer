@@ -32,6 +32,12 @@ A terminal-based DJ mixer for live performance with [TidalCycles](https://tidalc
 cargo install termixer
 ```
 
+### From release archive
+
+```bash
+curl -sL https://raw.githubusercontent.com/l00sed/termixer/master/install.sh | bash
+```
+
 ### From source
 
 ```bash
