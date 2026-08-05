@@ -32,7 +32,9 @@ A terminal-based DJ mixer for live performance with [TidalCycles](https://tidalc
 cargo install termixer
 ```
 
-### From release archive
+### From GitHub release archive
+
+This will take the latest release binary and install it to `~/.cargo/bin/termixer` (same as `cargo`).
 
 ```bash
 curl -sL https://raw.githubusercontent.com/l00sed/termixer/master/install.sh | bash

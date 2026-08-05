@@ -1540,10 +1540,17 @@ impl<'a> MixerView<'a> {
         current_queue_idx: usize,
     ) {
         let visible_items = area.height as usize;
+        let scroll = picker.queue_scroll_offset;
 
         // Queue items
-        for (i, item) in picker.queue.iter().enumerate().take(visible_items) {
-            let y = area.y + i as u16;
+        for (i, item) in picker
+            .queue
+            .iter()
+            .enumerate()
+            .skip(scroll)
+            .take(visible_items)
+        {
+            let y = area.y + i as u16 - scroll as u16;
             if y >= area.y + area.height {
                 break;
             }
@@ -1560,7 +1567,7 @@ impl<'a> MixerView<'a> {
             }
 
             let icon = if is_playing {
-                "▶ "
+                " ▶"
             } else if item.is_socket || item.is_pcm_fifo {
                 " "
             } else if item.is_udp {
@@ -1568,7 +1575,7 @@ impl<'a> MixerView<'a> {
             } else {
                 "\u{f001} "
             };
-            let line = format!("{}{}", icon, item.name);
+            let line = format!("{} {}", icon, item.name);
 
             let usable_width = area.width as usize;
             let truncated_name = if line.len() > usable_width {
@@ -1581,18 +1588,19 @@ impl<'a> MixerView<'a> {
             buf.set_string(area.x, y, &truncated_name, style);
             if is_playing {
                 let icon_style = if is_selected {
-                    Style::default().fg(STATUS_PLAYING).bg(BORDER_ACTIVE)
+                    Style::default().fg(ratatui::style::Color::Black).bg(BORDER_ACTIVE)
                 } else {
                     Style::default().fg(STATUS_PLAYING)
                 };
-                buf.set_string(area.x, y, "▶", icon_style);
+                buf.set_string(area.x, y, " ▶", icon_style);
             }
         }
 
-        // "+" item at the bottom (if there's space)
+        // "+" item at the bottom (if it's within the visible range)
         let plus_idx = picker.queue.len();
-        if plus_idx < visible_items {
-            let y = area.y + plus_idx as u16;
+        let plus_screen = plus_idx.saturating_sub(scroll);
+        if plus_screen < visible_items {
+            let y = area.y + plus_screen as u16;
             if y < area.y + area.height {
                 let is_selected = picker.queue_selected.is_none() && !picker.tab_focused;
                 let style = if is_selected {
@@ -1646,6 +1654,8 @@ impl<'a> MixerView<'a> {
                     ""
                 } else if item.is_udp {
                     "◉ "
+                } else if picker.tab == SourcePickerTab::DeckActions {
+                    ""
                 } else {
                     "\u{f001} "
                 };
@@ -2525,7 +2535,7 @@ impl<'a> MixerView<'a> {
                 };
 
                 let icon = if item.is_dir { "\u{f07b} " } else { "\u{e60b} " };
-                let line = format!("{}{}", icon, item.name);
+                let line = format!("{} {}", icon, item.name);
 
                 let usable_width = list_area.width as usize;
                 let truncated_name = if line.len() > usable_width {

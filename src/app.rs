@@ -379,6 +379,8 @@ pub struct SourcePickerState {
     pub queue: Vec<QueueItem>,
     /// Index of selected item in queue (-1 means none selected)
     pub queue_selected: Option<usize>,
+    /// Scroll offset for the queue list
+    pub queue_scroll_offset: usize,
     /// Sub-view for browsing sources when adding to queue
     pub adding_to_queue: bool,
     /// Sub-view tab (MpvSockets or AudioFiles when adding)
@@ -437,6 +439,7 @@ impl SourcePickerState {
             tab_scroll_offset: 0,
             queue: Vec::new(),
             queue_selected: None,
+            queue_scroll_offset: 0,
             adding_to_queue: false,
             add_tab: AddSourceTab::MpvSockets,
             add_items: Vec::new(),
@@ -487,11 +490,15 @@ impl SourcePickerState {
         }
         if self.selected == 0 || self.selected >= self.filtered.len() {
             self.selected = self.filtered.len() - 1;
+            let vh = self.visible_height;
+            if self.selected >= self.scroll_offset + vh {
+                self.scroll_offset = self.selected.saturating_sub(vh - 1);
+            }
         } else {
             self.selected -= 1;
-        }
-        if self.selected < self.scroll_offset {
-            self.scroll_offset = self.selected;
+            if self.selected < self.scroll_offset {
+                self.scroll_offset = self.selected;
+            }
         }
     }
 
@@ -501,11 +508,12 @@ impl SourcePickerState {
         }
         if self.selected + 1 >= self.filtered.len() {
             self.selected = 0;
+            self.scroll_offset = 0;
         } else {
             self.selected += 1;
-        }
-        if self.selected >= self.scroll_offset + self.visible_height {
-            self.scroll_offset = self.selected.saturating_sub(self.visible_height - 1);
+            if self.selected >= self.scroll_offset + self.visible_height {
+                self.scroll_offset = self.selected.saturating_sub(self.visible_height - 1);
+            }
         }
     }
 
@@ -542,11 +550,15 @@ impl SourcePickerState {
         }
         if self.add_selected == 0 || self.add_selected >= self.add_filtered.len() {
             self.add_selected = self.add_filtered.len() - 1;
+            let vh = self.visible_height;
+            if self.add_selected >= self.add_scroll_offset + vh {
+                self.add_scroll_offset = self.add_selected.saturating_sub(vh - 1);
+            }
         } else {
             self.add_selected -= 1;
-        }
-        if self.add_selected < self.add_scroll_offset {
-            self.add_scroll_offset = self.add_selected;
+            if self.add_selected < self.add_scroll_offset {
+                self.add_scroll_offset = self.add_selected;
+            }
         }
     }
 
@@ -556,11 +568,12 @@ impl SourcePickerState {
         }
         if self.add_selected + 1 >= self.add_filtered.len() {
             self.add_selected = 0;
+            self.add_scroll_offset = 0;
         } else {
             self.add_selected += 1;
-        }
-        if self.add_selected >= self.add_scroll_offset + self.visible_height {
-            self.add_scroll_offset = self.add_selected.saturating_sub(self.visible_height - 1);
+            if self.add_selected >= self.add_scroll_offset + self.visible_height {
+                self.add_scroll_offset = self.add_selected.saturating_sub(self.visible_height - 1);
+            }
         }
     }
 
@@ -660,6 +673,36 @@ impl SourcePickerState {
             self.scroll_offset = self.selected;
         } else if self.selected >= self.scroll_offset + self.visible_height {
             self.scroll_offset = self.selected.saturating_sub(self.visible_height - 1);
+        }
+    }
+
+    /// Ensure queue scroll offset keeps the selected queue item visible.
+    /// The queue has an extra "+" row at the bottom, so total count is queue.len() + 1.
+    pub fn clamp_queue_scroll(&mut self) {
+        if self.visible_height == 0 {
+            return;
+        }
+        let total = self.queue.len() + 1;
+        let max_scroll = total.saturating_sub(self.visible_height);
+        self.queue_scroll_offset = self.queue_scroll_offset.min(max_scroll);
+
+        match self.queue_selected {
+            Some(sel) => {
+                if sel < self.queue_scroll_offset {
+                    self.queue_scroll_offset = sel;
+                } else if sel >= self.queue_scroll_offset + self.visible_height {
+                    self.queue_scroll_offset = sel.saturating_sub(self.visible_height - 1);
+                }
+            }
+            None => {
+                // The "+" item is selected (queue.len() position)
+                let plus_idx = self.queue.len();
+                if plus_idx < self.queue_scroll_offset {
+                    self.queue_scroll_offset = plus_idx;
+                } else if plus_idx >= self.queue_scroll_offset + self.visible_height {
+                    self.queue_scroll_offset = plus_idx.saturating_sub(self.visible_height - 1);
+                }
+            }
         }
     }
 
@@ -7303,21 +7346,33 @@ impl App {
     }
 
     fn scan_deck_actions(&mut self) {
+        let deck_a_ch = self.mixer.dj.deck_a_channel;
+        let deck_b_ch = self.mixer.dj.deck_b_channel;
+        let deck_c_ch = self.mixer.dj.deck_c_channel;
         let decks = [
             (
                 Deck::A,
                 "A",
-                self.mpv_deck_a.is_some() || self.sc_deck_a.is_some(),
+                self.mixer
+                    .get_channel(deck_a_ch)
+                    .map(|ch| ch.connected)
+                    .unwrap_or(false),
             ),
             (
                 Deck::B,
                 "B",
-                self.mpv_deck_b.is_some() || self.sc_deck_b.is_some(),
+                self.mixer
+                    .get_channel(deck_b_ch)
+                    .map(|ch| ch.connected)
+                    .unwrap_or(false),
             ),
             (
                 Deck::C,
                 "C",
-                self.mpv_deck_c.is_some() || self.sc_deck_c.is_some(),
+                self.mixer
+                    .get_channel(deck_c_ch)
+                    .map(|ch| ch.connected)
+                    .unwrap_or(false),
             ),
         ];
         for (_deck, label, connected) in &decks {
@@ -7634,18 +7689,14 @@ impl App {
                     } else {
                         self.source_picker.tab_focused = true;
                     }
+                    self.source_picker.clamp_queue_scroll();
                 }
                 KeyCode::Char('k') | KeyCode::Up
                     if !key.modifiers.contains(KeyModifiers::SHIFT) =>
                 {
                     if self.source_picker.tab_focused {
                         self.source_picker.tab_focused = false;
-                        if self.source_picker.queue.is_empty() {
-                            self.source_picker.queue_selected = None;
-                        } else {
-                            self.source_picker.queue_selected =
-                                Some(self.source_picker.queue.len() - 1);
-                        }
+                        self.source_picker.queue_selected = None;
                     } else if let Some(sel) = self.source_picker.queue_selected {
                         if sel > 0 {
                             self.source_picker.queue_selected = Some(sel - 1);
@@ -7659,6 +7710,7 @@ impl App {
                     } else {
                         self.source_picker.tab_focused = true;
                     }
+                    self.source_picker.clamp_queue_scroll();
                 }
                 KeyCode::Char('h') | KeyCode::Left => {
                     self.source_picker.tab_focused = true;
@@ -7685,6 +7737,7 @@ impl App {
                     } else {
                         self.source_picker.queue_selected = Some(0);
                     }
+                    self.source_picker.clamp_queue_scroll();
                 }
                 KeyCode::Char('G') => {
                     self.source_picker.tab_focused = false;
@@ -7694,6 +7747,7 @@ impl App {
                         self.source_picker.queue_selected =
                             Some(self.source_picker.queue.len() - 1);
                     }
+                    self.source_picker.clamp_queue_scroll();
                 }
                 KeyCode::Char('a') => {
                     // Shortcut to add: open add-to-queue sub-view
@@ -7738,6 +7792,7 @@ impl App {
                             }
                             self.save_queue_to_deck();
                         }
+                        self.source_picker.clamp_queue_scroll();
                     }
                 }
                 KeyCode::Char('J') | KeyCode::Down
@@ -7760,6 +7815,7 @@ impl App {
                             }
                         }
                         self.save_queue_to_deck();
+                        self.source_picker.clamp_queue_scroll();
                     }
                 }
                 KeyCode::Char('K') | KeyCode::Up
@@ -7782,6 +7838,7 @@ impl App {
                             }
                         }
                         self.save_queue_to_deck();
+                        self.source_picker.clamp_queue_scroll();
                     }
                 }
                 KeyCode::Enter => {
@@ -7807,6 +7864,7 @@ impl App {
                         // "+" is selected (no explicit selection) — open add view
                         self.enter_add_source_mode();
                     }
+                    self.source_picker.clamp_queue_scroll();
                 }
                 _ => {}
             },
@@ -7995,6 +8053,7 @@ impl App {
         self.source_picker.adding_to_queue = false;
         self.source_picker.tab = SourcePickerTab::Queue;
         self.source_picker.queue_selected = Some(self.source_picker.queue.len() - 1);
+        self.source_picker.clamp_queue_scroll();
 
         if was_empty {
             let loaded_item = self.source_picker.queue[first_new_idx].clone();

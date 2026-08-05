@@ -2,7 +2,7 @@
 set -euo pipefail
 
 REPO="l00sed/termixer"
-INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
+INSTALL_DIR="${INSTALL_DIR:-$HOME/.cargo/bin}"
 
 detect_target() {
   local os arch

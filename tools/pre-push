@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "Running clippy..."
+cargo clippy -- -D warnings || { echo "❌ Clippy failed"; exit 1; }
+
+echo "Running tests..."
+cargo test || { echo "❌ Tests failed"; exit 1; }
