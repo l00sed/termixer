@@ -904,7 +904,12 @@ pub struct AudioEngine {
     pub seek_requests: [Arc<AtomicF64>; 3],
     pub lfo_debug: Arc<Mutex<String>>,
     cmd_tx: Mutex<Producer<AudioCommand>>,
-    _stream: Option<cpal::Stream>,
+    _stream: Mutex<Option<cpal::Stream>>,
+    /// Master mix output: the main callback pushes the final stereo mix here,
+    /// and the cpal output callback reads from the consumer. This indirection
+    /// allows `set_master_device()` to swap the output stream without moving
+    /// the callback's owned state (ctrl_output, cmd_consumer, etc.).
+    master_producer: Arc<Mutex<Option<Producer<f32>>>>,
     mic_stream: Mutex<Option<cpal::Stream>>,
     mic_cmd_tx: Mutex<Producer<MicCommand>>,
     selected_mic: Mutex<Option<usize>>,
@@ -920,6 +925,12 @@ pub struct AudioEngine {
     capture_reverse: [Arc<CaptureReverseState>; 3],
     /// Device sample rate, stored for pipe capture upsampling.
     device_sr: u32,
+    /// Master output: second cpal stream on a (potentially different) device.
+    /// The main callback pushes the final stereo mix to `master_producer`;
+    /// this stream's callback reads from the consumer and plays to hardware.
+    /// Created on first call to `set_master_device()` — the initial stream
+    /// handles output directly until then.
+    _master_output_stream: Mutex<Option<cpal::Stream>>,
     /// Headphone (CUE) output: second cpal stream on a separate device.
     /// Deck C audio is routed here instead of the main mix.
     _headphone_stream: Mutex<Option<cpal::Stream>>,
@@ -1080,6 +1091,14 @@ impl AudioEngine {
         // samples here; headphone cpal callback reads and outputs them.
         let (hp_prod, hp_cons) = RingBuffer::<f32>::new(32768);
         let hp_producer = Arc::new(Mutex::new(Some(hp_prod)));
+
+        // Master output ring buffer: main callback writes the final stereo
+        // mix here; cpal output callback reads and outputs to the device.
+        // This indirection allows `set_master_device()` to swap the output
+        // stream without moving the callback's owned state.
+        let (master_prod, master_cons) = RingBuffer::<f32>::new(32768);
+        let master_producer = Arc::new(Mutex::new(Some(master_prod)));
+        let mut master_cons_slot = Some(master_cons);
 
         // ── Host selection ──
         //
@@ -1389,6 +1408,7 @@ impl AudioEngine {
             let cb_seek_requests = seek_requests.clone();
             let cb_capture_reverse = capture_reverse.clone();
             let cb_hp_producer = Arc::clone(&hp_producer);
+            let cb_master_producer = Arc::clone(&master_producer);
             let cb_pad_sample_cache = Arc::clone(&pad_sample_cache);
             let cb_sequence_steps = Arc::clone(&sequence_steps);
             let cb_pad_triggers = Arc::clone(&pad_triggers);
@@ -1447,6 +1467,12 @@ impl AudioEngine {
             }
             let mut pad_voices = PadVoiceState::new(pad_voice_consumers_vec, sr_hz as f32);
             let mut mic_reader = MicReader::new(sr_hz as f32);
+            // Master output ring buffer consumer — final mix goes here
+            let Some(mut master_cons_move) = master_cons_slot.take() else {
+                last_err = "internal master consumer consumed by previous stream build failure"
+                    .to_string();
+                continue;
+            };
 
             let result = match fmt {
                 cpal::SampleFormat::F32 => device.build_output_stream(
@@ -1470,6 +1496,7 @@ impl AudioEngine {
                             &cb_duration,
                             &cb_seek_requests,
                             cb_hp_producer.as_ref(),
+                            cb_master_producer.as_ref(),
                             &mut pad_voices,
                             &cb_pad_sample_cache,
                             &cb_sequence_steps,
@@ -1479,6 +1506,7 @@ impl AudioEngine {
                             &mut mic_cmd_consumer,
                             &mut mic_reader,
                         );
+                        master_output_callback(data, &mut master_cons_move, channels);
                     },
                     rate_limited_err("Audio: "),
                     None,
@@ -1510,6 +1538,7 @@ impl AudioEngine {
                             &cb_duration,
                             &cb_seek_requests,
                             cb_hp_producer.as_ref(),
+                            cb_master_producer.as_ref(),
                             &mut pad_voices,
                             &cb_pad_sample_cache,
                             &cb_sequence_steps,
@@ -1519,6 +1548,7 @@ impl AudioEngine {
                             &mut mic_cmd_consumer,
                             &mut mic_reader,
                         );
+                        master_output_callback(fb, &mut master_cons_move, channels);
                         for f in 0..frames {
                             for ci in 0..channels.min(2) {
                                 let idx = f * channels + ci;
@@ -1556,6 +1586,7 @@ impl AudioEngine {
                             &cb_duration,
                             &cb_seek_requests,
                             cb_hp_producer.as_ref(),
+                            cb_master_producer.as_ref(),
                             &mut pad_voices,
                             &cb_pad_sample_cache,
                             &cb_sequence_steps,
@@ -1565,6 +1596,7 @@ impl AudioEngine {
                             &mut mic_cmd_consumer,
                             &mut mic_reader,
                         );
+                        master_output_callback(fb, &mut master_cons_move, channels);
                         for f in 0..frames {
                             for ci in 0..channels.min(2) {
                                 let idx = f * channels + ci;
@@ -1581,6 +1613,7 @@ impl AudioEngine {
                     ctrl_output_slot = Some(ctrl_output);
                     cmd_consumer_slot = Some(cmd_consumer);
                     mic_cmd_consumer_slot = Some(mic_cmd_consumer);
+                    master_cons_slot = Some(master_cons_move);
                     continue;
                 }
             };
@@ -1746,7 +1779,9 @@ impl AudioEngine {
             lfo_debug,
             seek_requests,
             cmd_tx: Mutex::new(cmd_producer),
-            _stream: Some(stream),
+            _stream: Mutex::new(Some(stream)),
+            master_producer,
+            _master_output_stream: Mutex::new(None),
             mic_stream: Mutex::new(None),
             mic_cmd_tx: Mutex::new(mic_cmd_producer),
             selected_mic: Mutex::new(None),
@@ -1982,13 +2017,120 @@ impl AudioEngine {
         );
         match hp_result {
             Ok(s) => {
-                // Replace stream and producer (old stream is dropped here,
-                // which drops old consumer, and old producer is replaced).
-                *self._headphone_stream.lock().unwrap() = Some(s);
-                *self.headphone_producer.lock().unwrap() = Some(hp_prod);
-                eprintln!("Audio: headphone switched to '{}'", device_name);
+                match s.play() {
+                    Ok(_) => {
+                        // Replace stream and producer (old stream is dropped here,
+                        // which drops old consumer, and old producer is replaced).
+                        *self._headphone_stream.lock().unwrap() = Some(s);
+                        *self.headphone_producer.lock().unwrap() = Some(hp_prod);
+                        eprintln!("Audio: headphone switched to '{}'", device_name);
+                    }
+                    Err(e) => eprintln!(
+                        "Audio: headphone stream to '{}' built but play failed: {}",
+                        device_name, e
+                    ),
+                }
             }
             Err(e) => eprintln!("Audio: headphone stream to '{}' failed: {}", device_name, e),
+        }
+    }
+
+    /// Switch the master output to a different device.
+    /// Creates a new cpal stream on the target device (separate from the main
+    /// stream which runs `audio_callback`). The main callback pushes the final
+    /// mix to `master_producer`; the new stream's callback reads from the
+    /// consumer and outputs to the device. The main stream continues running
+    /// but its own `master_output_callback` reads from the now-orphaned old
+    /// consumer and outputs silence — no audio pipeline interruption.
+    pub fn set_master_device(&self, device_name: &str) {
+        let host = cpal::default_host();
+        let devices: Vec<_> = match host.output_devices() {
+            Ok(it) => it.collect(),
+            Err(e) => {
+                eprintln!("Audio: output_devices: {}", e);
+                return;
+            }
+        };
+        let target = devices
+            .iter()
+            .find(|d| d.description().ok().map(|n| n.to_string()).as_deref() == Some(device_name));
+        let target = match target {
+            Some(d) => d,
+            None => {
+                eprintln!("Audio: master output device '{}' not found", device_name);
+                return;
+            }
+        };
+
+        let configs: Vec<_> = match target.supported_output_configs() {
+            Ok(c) => c.collect(),
+            Err(_) => {
+                eprintln!("Audio: master output device '{}' has no configs", device_name);
+                return;
+            }
+        };
+        let picked = configs
+            .iter()
+            .find(|c| c.channels() >= 2 && c.sample_format() == cpal::SampleFormat::F32)
+            .or_else(|| configs.first());
+        let picked = match picked {
+            Some(p) => p,
+            None => {
+                eprintln!(
+                    "Audio: master output device '{}' has no F32 config",
+                    device_name
+                );
+                return;
+            }
+        };
+        let sr: u32 = if picked.min_sample_rate() <= 48000 && picked.max_sample_rate() >= 48000 {
+            48000
+        } else {
+            picked.max_sample_rate()
+        };
+        let cfg = (*picked).with_sample_rate(sr).config();
+        let mut cfg = cfg;
+        cfg.buffer_size = cpal::BufferSize::Fixed(256);
+        let channels = cfg.channels as usize;
+
+        // New ring buffer pair: audio_callback pushes to `master_prod`,
+        // the new output stream reads from `master_cons`.
+        let (master_prod, master_cons) = RingBuffer::<f32>::new(32768);
+        let mut master_cons_move = master_cons;
+
+        let master_result = target.build_output_stream(
+            &cfg,
+            move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+                master_output_callback(data, &mut master_cons_move, channels);
+            },
+            rate_limited_err("Master audio: "),
+            None,
+        );
+        match master_result {
+            Ok(s) => {
+                match s.play() {
+                    Ok(_) => {
+                        // Store the new output stream (drops old one if any).
+                        // Do NOT replace self._stream — that's the main stream
+                        // running audio_callback; replacing it would kill the
+                        // entire decode/mix pipeline.
+                        *self._master_output_stream.lock().unwrap() = Some(s);
+                        // Point audio_callback at the new ring buffer producer.
+                        // The main stream's old master_output_callback now reads
+                        // from an orphaned consumer → outputs silence on old device.
+                        *self.master_producer.lock().unwrap() = Some(master_prod);
+                        eprintln!("Audio: master output switched to '{}'", device_name);
+                    }
+                    Err(e) => eprintln!(
+                        "Audio: master output stream to '{}' built but play failed: {}",
+                        device_name, e
+                    ),
+                }
+            }
+            Err(e) => eprintln!(
+                "Audio: master output stream to '{}' failed: {}",
+                device_name, e
+            ),
         }
     }
 
@@ -2243,7 +2385,7 @@ impl Drop for AudioEngine {
     fn drop(&mut self) {
         // Suppress cpal's "Dropping DeviceSink" warning on exit.
         // The stream is inert at this point (process is terminating).
-        if let Some(stream) = self._stream.take() {
+        if let Some(stream) = self._stream.lock().unwrap().take() {
             std::mem::forget(stream);
         }
     }
@@ -2349,6 +2491,56 @@ fn headphone_callback(data: &mut [f32], consumer: &mut rtrb::Consumer<f32>, chan
             let r = soft_limit(
                 sample_pair.get(1).copied().unwrap_or(l) * sys_vol * DECK_C_VOLUME_OFFSET,
             );
+            for ci in 0..channels.min(2) {
+                data[written * channels + ci] = if ci == 0 { l } else { r };
+            }
+            for ci in 2..channels {
+                data[written * channels + ci] = 0.0;
+            }
+            written += 1;
+        }
+        chunk.commit_all();
+    }
+    let written_frames = to_read;
+    for f in written_frames..frames {
+        for c in 0..channels {
+            data[f * channels + c] = 0.0;
+        }
+    }
+}
+
+/// Master output callback: reads the final stereo mix from the ring buffer
+/// and writes to the cpal output stream. Outputs silence when buffer empty.
+fn master_output_callback(data: &mut [f32], consumer: &mut rtrb::Consumer<f32>, channels: usize) {
+    let frames = data.len() / channels;
+    let available = consumer.slots();
+    let stereo_samples = available / 2;
+    let to_read = frames.min(stereo_samples);
+    if to_read > 0
+        && let Ok(chunk) = consumer.read_chunk(to_read * 2)
+    {
+        let (first, second) = chunk.as_slices();
+        let mut written = 0;
+        for sample_pair in first.chunks(2) {
+            if written >= frames {
+                break;
+            }
+            let l = sample_pair.first().copied().unwrap_or(0.0);
+            let r = sample_pair.get(1).copied().unwrap_or(l);
+            for ci in 0..channels.min(2) {
+                data[written * channels + ci] = if ci == 0 { l } else { r };
+            }
+            for ci in 2..channels {
+                data[written * channels + ci] = 0.0;
+            }
+            written += 1;
+        }
+        for sample_pair in second.chunks(2) {
+            if written >= frames {
+                break;
+            }
+            let l = sample_pair.first().copied().unwrap_or(0.0);
+            let r = sample_pair.get(1).copied().unwrap_or(l);
             for ci in 0..channels.min(2) {
                 data[written * channels + ci] = if ci == 0 { l } else { r };
             }
@@ -2486,6 +2678,7 @@ fn audio_callback(
     duration: &[Arc<AtomicF64>; 3],
     seek_requests: &[Arc<AtomicF64>; 3],
     hp_producer: &Mutex<Option<Producer<f32>>>,
+    master_producer: &Mutex<Option<Producer<f32>>>,
     pad_voices: &mut PadVoiceState,
     pad_sample_cache: &std::sync::RwLock<Vec<Option<Arc<(Vec<f32>, u32)>>>>,
     sequence_steps: &[AtomicUsize],
@@ -2938,8 +3131,12 @@ fn audio_callback(
         }
 
         ml.push_stereo(mix_l, mix_r);
-        data[f * 2] = soft_limit(mix_l);
-        data[f * 2 + 1] = soft_limit(mix_r);
+        if let Ok(mut guard) = master_producer.try_lock()
+            && let Some(ref mut prod) = *guard
+        {
+            let _ = prod.push(soft_limit(mix_l));
+            let _ = prod.push(soft_limit(mix_r));
+        }
     }
 
     for d in 0..3 {

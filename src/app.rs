@@ -3020,7 +3020,17 @@ impl App {
             );
 
             if result.deck == Deck::C {
-                self.mixer.cue_channel.playing = result.playing;
+                let deck_c_ch = self.mixer.dj.deck_c_channel;
+                let decoder_owned = self
+                    .audio_engine
+                    .as_ref()
+                    .map(|engine| {
+                        engine.has_decoder(deck_c_ch) && !engine.has_capture(deck_c_ch)
+                    })
+                    .unwrap_or(false);
+                if !decoder_owned {
+                    self.mixer.cue_channel.playing = result.playing;
+                }
                 if result.volume_ok {
                     self.mixer.cue_channel.fader = result.fader;
                 }
@@ -3042,8 +3052,15 @@ impl App {
                     .as_ref()
                     .map(|engine| engine.has_capture(ch_idx))
                     .unwrap_or(false);
+                let decoder_owned = self
+                    .audio_engine
+                    .as_ref()
+                    .map(|engine| engine.has_decoder(ch_idx) && !engine.has_capture(ch_idx))
+                    .unwrap_or(false);
 
-                ch.playing = result.playing;
+                if !decoder_owned {
+                    ch.playing = result.playing;
+                }
                 if result.volume_ok && !ch.muted {
                     ch.fader = result.fader;
                 }
@@ -6986,6 +7003,12 @@ impl App {
                 && let Some(ref engine) = self.audio_engine
             {
                 engine.set_headphone_device(display_name);
+            }
+            // Route cpal master output stream for Master target (works with or without MPV)
+            if self.output_picker_target == OutputPickerTarget::Master
+                && let Some(ref engine) = self.audio_engine
+            {
+                engine.set_master_device(display_name);
             }
 
             if let Some(ref mpv_dev) = mpv_name {
